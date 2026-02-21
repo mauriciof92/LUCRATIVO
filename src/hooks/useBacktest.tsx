@@ -59,7 +59,7 @@ export const useBacktest = () => {
         // ── PRIORIDADE 1: Cache local completo (salvo pelo import) ──
         const cached = localStorage.getItem('lucrativo-processed-games');
         const cacheTimestamp = localStorage.getItem('lucrativo-cache-timestamp');
-        const buildVersion = '2025-02-21-18'; // Cache-buster: atualizar a cada deploy significativo
+        const buildVersion = '2025-02-21-19'; // Cache-buster: força invalidação de builds antigos
         
         // Se cache existe E é da mesma versão do build, usar cache
         if (cached && cacheTimestamp === buildVersion) {
@@ -273,7 +273,7 @@ export const useBacktest = () => {
       // Salvar no cache local como backup com timestamp
       if (typeof window !== 'undefined') {
         localStorage.setItem('lucrativo-processed-games', JSON.stringify(results));
-        localStorage.setItem('lucrativo-cache-timestamp', '2025-02-21-18'); // Mesma versão do build
+        localStorage.setItem('lucrativo-cache-timestamp', '2025-02-21-19'); // Mesma versão do build
       }
     } catch (e: any) {
       setErr("Erro ao importar CSV: " + (e?.message ?? String(e)));
