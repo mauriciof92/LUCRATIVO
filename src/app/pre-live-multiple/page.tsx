@@ -1,15 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { analyzePreLiveMultiples, LiveMultipleSuggestion } from "../../lib/pre-live-multiple-analyzer";
+import { analyzePreLiveMultiples, LiveMultipleSuggestion, PreLiveMultipleAnalyzer } from "../../lib/pre-live-multiple-analyzer";
+import type { PreMatchOdds } from "../../lib/footballApi";
 
 export default function PreLiveMultiplePage() {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingOdds, setLoadingOdds] = useState(false);
   const [results, setResults] = useState<{
     suggestions: LiveMultipleSuggestion[];
     summary: any;
   } | null>(null);
+  const [csvText, setCsvText] = useState<string>(""); // Store CSV text for odds fetching
 
   const prettyMarketLabel = (raw: string) => {
     const s = String(raw ?? "").trim();
@@ -41,12 +44,41 @@ export default function PreLiveMultiplePage() {
     setLoading(true);
     try {
       const text = await file.text();
+      setCsvText(text); // Store for odds fetching
       const analysis = analyzePreLiveMultiples(text);
       setResults(analysis);
     } catch (err) {
       console.error("Erro na análise pré-live:", err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleFetchOdds = async () => {
+    if (!csvText) return;
+    setLoadingOdds(true);
+    try {
+      // Get today's date in YYYY-MM-DD format
+      const today = new Date().toISOString().split('T')[0];
+      
+      // Fetch odds from API
+      const oddsResponse = await fetch(`/api/football-odds?date=${today}`);
+      if (!oddsResponse.ok) {
+        throw new Error('Failed to fetch odds');
+      }
+      const oddsData = await oddsResponse.json();
+      
+      // Re-analyze with real odds
+      const analyzer = PreLiveMultipleAnalyzer.getInstance();
+      const analysis = analyzer.analyzeLiveMultiples(csvText, oddsData.oddsMap, oddsData.fixtureMap);
+      setResults(analysis);
+      
+      console.log(`[ODDS] Fetched odds for ${Object.keys(oddsData.oddsMap).length} fixtures, ${oddsData.reqUsed} API calls`);
+    } catch (err) {
+      console.error("Erro ao buscar odds:", err);
+      alert('Erro ao buscar odds. Verifique o console.');
+    } finally {
+      setLoadingOdds(false);
     }
   };
 
@@ -91,13 +123,29 @@ export default function PreLiveMultiplePage() {
         </div>
       </section>
 
-      <button
-        className="analyze-btn"
-        onClick={handleAnalyze}
-        disabled={!file || loading}
-      >
-        {loading ? "⏳ Analisando..." : "🔍 Analisar Oportunidades"}
-      </button>
+      <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginTop: 16 }}>
+        <button
+          className="analyze-btn"
+          onClick={handleAnalyze}
+          disabled={!file || loading || loadingOdds}
+          style={{ flex: 1 }}
+        >
+          {loading ? "⏳ Analisando..." : "🔍 Analisar Oportunidades"}
+        </button>
+        
+        <button
+          className="analyze-btn"
+          onClick={handleFetchOdds}
+          disabled={!csvText || loading || loadingOdds}
+          style={{ 
+            flex: 1,
+            background: loadingOdds ? '#666' : 'linear-gradient(135deg, #2196F3, #1976D2)',
+            border: loadingOdds ? '1px solid #555' : '1px solid #1976D2'
+          }}
+        >
+          {loadingOdds ? "⏳ Buscando..." : "🎲 Buscar Odds Reais"}
+        </button>
+      </div>
 
       {results && (
         <>
@@ -191,6 +239,15 @@ export default function PreLiveMultiplePage() {
                       <span className={`selection-tag ${sel.hasValue ? 'tag-value' : 'tag-novalue'}`}>
                         {sel.hasValue ? '💎 Valor' : 'Sem valor'}
                       </span>
+                      {/* 🆕 Odd quality tag */}
+                      {sel.oddTag && (
+                        <span className={`selection-tag ${
+                          sel.oddTag === 'SEM ODD' ? 'tag-noodd' : 
+                          sel.oddTag === 'ODD BAIXA' ? 'tag-lowodd' : ''
+                        }`}>
+                          {sel.oddTag === 'SEM ODD' ? '🔴 SEM ODD' : '🟠 ODD BAIXA'}
+                        </span>
+                      )}
                     </div>
                   </div>
                 ))}

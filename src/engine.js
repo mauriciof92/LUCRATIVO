@@ -1339,6 +1339,91 @@ export function shouldSkipBet(g, minConfidence = 0.50, maxOdds = 5.0) {
 }
 
 /* ─────────────────────────────────────────
+   POISON DETECTION — GATILHOS ANALÍTICOS EXCEPCIONAIS
+   Identifica jogos cujos dados de construção se destacam
+   estatisticamente, ativando gatilhos raros do motor.
+───────────────────────────────────────── */
+export function detectPoisonTriggers(g) {
+  const fav = getFavorito(g);
+  const scoreResult = computeScore(g);
+  const score = scoreResult?.score || 0;
+  const bonuses = scoreResult?.bonuses || [];
+  const confidence = computeConfidence(g)?.score || 0;
+  const profile = classifyProfile(g);
+  const triggers = [];
+
+  // ── Nível 1: 🔥 Dominância Absoluta (chFavGol >= 8) ──
+  if (fav.chFavGol >= 8) {
+    triggers.push({
+      level: 1,
+      icon: "🔥",
+      tag: "DOMINÂNCIA",
+      color: "#ff1744",
+      glow: "#ff174480",
+      reason: `chFavGol = ${fav.chFavGol.toFixed(1)} — bypass de elite ativado (≥8)`,
+    });
+  }
+
+  // ── Nível 2: ⚡ Blitz (gap >= 45 + chFavGol >= 6.5 + dfZebra < 30) ──
+  const dfZebra = fav.lado === '🏠' ? (g.dfA || 0) : (g.dfH || 0);
+  const blitzGap = dfZebra > 0 ? (fav.afFav - dfZebra) : 0;
+  if (blitzGap >= 45 && fav.chFavGol >= 6.5 && dfZebra > 0 && dfZebra < 30) {
+    triggers.push({
+      level: 2,
+      icon: "⚡",
+      tag: "BLITZ",
+      color: "#ffd600",
+      glow: "#ffd60080",
+      reason: `Gap ${blitzGap.toFixed(0)} (AF ${fav.afFav.toFixed(0)} vs Def ${dfZebra.toFixed(0)}) + chFavGol ${fav.chFavGol.toFixed(1)}`,
+    });
+  }
+
+  // ── Nível 3: 🚀 Manteiga (dfZebra < 35 + afFav > 75) ──
+  const dfZebraMain = fav.lado === '🏠' ? (g.dfA || 0) : (g.dfH || 0);
+  if (dfZebraMain > 0 && dfZebraMain < 35 && fav.afFav > 75) {
+    triggers.push({
+      level: 3,
+      icon: "🚀",
+      tag: "MANTEIGA",
+      color: "#ff9100",
+      glow: "#ff910080",
+      reason: `Def adversária frágil (${dfZebraMain.toFixed(0)}) + Ataque fav forte (${fav.afFav.toFixed(0)}) — linha elevada +1`,
+    });
+  }
+
+  // ── Nível 4: 💎 Bônus Compostos (2+ bônus empilhados) ──
+  if (bonuses.length >= 2) {
+    triggers.push({
+      level: 4,
+      icon: "💎",
+      tag: "COMPOSTO",
+      color: "#d500f9",
+      glow: "#d500f980",
+      reason: `${bonuses.length} bônus: ${bonuses.join(" + ")}`,
+    });
+  }
+
+  // ── Nível 5: ✨ Dupla Confirmação (score >= 75% + confidence >= 75%) ──
+  if (score >= 0.75 && confidence >= 0.75) {
+    triggers.push({
+      level: 5,
+      icon: "✨",
+      tag: "DUAL",
+      color: "#00e5ff",
+      glow: "#00e5ff80",
+      reason: `Score ${(score * 100).toFixed(0)}% + Confiança ${(confidence * 100).toFixed(0)}% — dupla confirmação`,
+    });
+  }
+
+  return {
+    isPoison: triggers.length > 0,
+    triggers,
+    highestLevel: triggers.length > 0 ? Math.min(...triggers.map(t => t.level)) : 0,
+    primaryTrigger: triggers.length > 0 ? triggers.reduce((a, b) => a.level < b.level ? a : b) : null,
+  };
+}
+
+/* ─────────────────────────────────────────
    VALUE BET DETECTION - PROBABILIDADE DINÂMICA
 ───────────────────────────────────────── */
 export function calculateValueBet(g, marketLabel, odd) {

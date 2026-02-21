@@ -1,4 +1,4 @@
-import { parseCSV, getOddForLabel, getMinOddForLabel, classifyProfile, suggestMainMarket, suggestCombo, getFavorito, computeConfidence, computeScore, getScore, calculateRiskAdjustedStake, shouldSkipBet, calculateValueBet } from "../engine";
+import { parseCSV, getOddForLabel, getMinOddForLabel, classifyProfile, suggestMainMarket, suggestCombo, getFavorito, computeConfidence, computeScore, getScore, calculateRiskAdjustedStake, shouldSkipBet, calculateValueBet, detectPoisonTriggers } from "../engine";
 import type { RealStats } from "./footballApi";
 
 export interface BetResult {
@@ -44,6 +44,12 @@ export interface BetResult {
   profile: string;
   confidence: number;
   favorito: ReturnType<typeof getFavorito>;
+  poison?: {
+    isPoison: boolean;
+    triggers: Array<{ level: number; icon: string; tag: string; color: string; glow: string; reason: string }>;
+    highestLevel: number;
+    primaryTrigger: { level: number; icon: string; tag: string; color: string; glow: string; reason: string } | null;
+  };
 }
 
 export interface BacktestSummary {
@@ -222,6 +228,7 @@ export function runBacktest(csvText: string, options: { useRiskManagement?: bool
       profile,
       confidence,
       favorito: getFavorito(g),
+      poison: detectPoisonTriggers(g),
     });
   }
 

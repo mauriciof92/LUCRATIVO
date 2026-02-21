@@ -405,7 +405,15 @@ export default function BacktestPage() {
                 </thead>
                 <tbody>
                   {filtered.map((r: any, i: number) => (
-                    <tr key={r.id} style={{ borderBottom: `1px solid ${C.border}20`, ...getEliteRowStyle(r) }}>
+                    <tr key={r.id} style={{
+                      borderBottom: `1px solid ${C.border}20`,
+                      ...getEliteRowStyle(r),
+                      ...(r.poison?.isPoison ? {
+                        background: `linear-gradient(135deg, ${r.poison.primaryTrigger?.color || C.elite}08, transparent)`,
+                        borderLeft: `3px solid ${r.poison.primaryTrigger?.color || C.elite}`,
+                        boxShadow: `inset 0 0 40px ${r.poison.primaryTrigger?.color || C.elite}06`,
+                      } : {}),
+                    }}>
                       <TD style={{ color: C.muted, whiteSpace: "nowrap" }}>
                         {(r.hour || "").slice(11, 16) || r.hour || "—"}
                       </TD>
@@ -413,7 +421,18 @@ export default function BacktestPage() {
                         {r.league}
                       </TD>
                       <TD style={{ color: C.text, fontWeight: 500, whiteSpace: "nowrap" }}>
-                        {r.match}
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          {r.match}
+                          {r.poison?.isPoison && r.poison.triggers.map((t: any, ti: number) => (
+                            <span key={ti} title={t.reason} style={{
+                              background: `${t.color}20`, color: t.color, border: `1px solid ${t.color}60`,
+                              borderRadius: "3px", padding: "1px 5px", fontSize: "9px", fontWeight: 800,
+                              letterSpacing: "0.5px", cursor: "help", whiteSpace: "nowrap",
+                            }}>
+                              {t.icon} {t.tag}
+                            </span>
+                          ))}
+                        </div>
                       </TD>
                       <TD style={{ color: C.yellow, fontWeight: 700, textAlign: "center", whiteSpace: "nowrap" }}>
                         {r.resultHome ?? '?'} – {r.resultAway ?? '?'}

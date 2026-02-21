@@ -431,61 +431,114 @@ export default function PanoramaPage() {
         </div>
       )}
 
-      {/* Jogos Elite Recentes */}
-      {results.filter(r => (r.score || 0) > 75).length > 0 && (
+      {/* Jogos Elite Recentes — com Poison Detection */}
+      {results.filter(r => (r.score || 0) > 75 || r.poison?.isPoison).length > 0 && (
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: "12px", padding: "24px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "20px" }}>
             <Star size={20} color={C.elite} />
             <h2 style={{ fontSize: "18px", fontWeight: 600, margin: 0, color: C.text }}>
               Oportunidades Elite ⭐
             </h2>
+            {results.filter(r => r.poison?.isPoison).length > 0 && (
+              <span style={{
+                background: "#ff174420", color: "#ff1744", border: "1px solid #ff174460",
+                borderRadius: "6px", padding: "2px 10px", fontSize: "11px", fontWeight: 700,
+              }}>
+                {results.filter(r => r.poison?.isPoison).length} POISON
+              </span>
+            )}
           </div>
           
           <div style={{ display: "grid", gap: "12px" }}>
             {results
-              .filter(r => (r.score || 0) > 75)
-              .slice(0, 5)
-              .map((result, index) => (
-                <div key={result.id} style={{
-                  background: `linear-gradient(135deg, ${C.elite}10, transparent)`,
-                  border: `2px solid ${C.elite}`,
-                  borderRadius: "8px",
-                  padding: "16px",
-                  boxShadow: `0 0 20px ${C.elite}40`
-                }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                    <div>
-                      <div style={{ fontSize: "14px", fontWeight: 600, color: C.text, marginBottom: "4px" }}>
-                        {result.match}
+              .filter(r => (r.score || 0) > 75 || r.poison?.isPoison)
+              .sort((a, b) => (a.poison?.highestLevel || 99) - (b.poison?.highestLevel || 99))
+              .slice(0, 8)
+              .map((result, index) => {
+                const p = result.poison;
+                const isPoisonCard = p?.isPoison;
+                const primary = p?.primaryTrigger;
+                const borderColor = isPoisonCard ? (primary?.color || C.elite) : C.elite;
+                const glowColor = isPoisonCard ? (primary?.glow || `${C.elite}40`) : `${C.elite}40`;
+                
+                return (
+                  <div key={result.id} style={{
+                    background: `linear-gradient(135deg, ${borderColor}12, transparent)`,
+                    border: `2px solid ${borderColor}`,
+                    borderRadius: "8px",
+                    padding: "16px",
+                    boxShadow: isPoisonCard ? `0 0 24px ${glowColor}, inset 0 0 30px ${borderColor}08` : `0 0 20px ${C.elite}40`,
+                    position: "relative",
+                    transition: "box-shadow 0.3s ease",
+                  }}>
+                    {/* Poison Badges */}
+                    {isPoisonCard && p?.triggers && (
+                      <div style={{ display: "flex", gap: "6px", marginBottom: "10px", flexWrap: "wrap" }}>
+                        {p.triggers.map((t, ti) => (
+                          <span key={ti} title={t.reason} style={{
+                            background: `${t.color}20`,
+                            color: t.color,
+                            border: `1px solid ${t.color}60`,
+                            borderRadius: "4px",
+                            padding: "2px 8px",
+                            fontSize: "10px",
+                            fontWeight: 800,
+                            letterSpacing: "0.5px",
+                            cursor: "help",
+                            whiteSpace: "nowrap",
+                          }}>
+                            {t.icon} {t.tag}
+                          </span>
+                        ))}
                       </div>
-                      <div style={{ fontSize: "12px", color: C.muted }}>
-                        {result.league}
+                    )}
+
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                      <div>
+                        <div style={{ fontSize: "14px", fontWeight: 600, color: C.text, marginBottom: "4px" }}>
+                          {result.match}
+                        </div>
+                        <div style={{ fontSize: "12px", color: C.muted }}>
+                          {result.league}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: "16px", fontWeight: 700, color: isPoisonCard ? borderColor : C.elite }}>
+                          {isPoisonCard ? primary?.icon : "⭐"} {result.score?.toFixed(1)}
+                        </div>
+                        <div style={{ fontSize: "11px", color: C.muted }}>
+                          Blitz Score
+                        </div>
                       </div>
                     </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: "16px", fontWeight: 700, color: C.elite }}>
-                        ⭐ {result.score?.toFixed(1)}
-                      </div>
-                      <div style={{ fontSize: "11px", color: C.muted }}>
-                        Blitz Score
-                      </div>
+                    
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12px" }}>
+                      <span style={{ color: isPoisonCard ? borderColor : C.accent, fontWeight: isPoisonCard ? 700 : 500 }}>
+                        {result.mainMarket.label}
+                      </span>
+                      <span style={{ 
+                        color: result.mainMarket.result === "win" ? C.green : 
+                               result.mainMarket.result === "lose" ? C.red : C.muted 
+                      }}>
+                        {result.mainMarket.result === "win" ? "✅ Verde" : 
+                         result.mainMarket.result === "lose" ? "❌ Vermelho" : "—"}
+                      </span>
                     </div>
+
+                    {/* Poison Reason (tooltip expandido) */}
+                    {isPoisonCard && primary && (
+                      <div style={{
+                        marginTop: "8px", padding: "6px 10px",
+                        background: `${primary.color}10`, borderRadius: "4px",
+                        fontSize: "11px", color: primary.color, fontWeight: 500,
+                        borderLeft: `3px solid ${primary.color}`,
+                      }}>
+                        {primary.reason}
+                      </div>
+                    )}
                   </div>
-                  
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12px" }}>
-                    <span style={{ color: C.accent, fontWeight: 500 }}>
-                      {result.mainMarket.label}
-                    </span>
-                    <span style={{ 
-                      color: result.mainMarket.result === "win" ? C.green : 
-                             result.mainMarket.result === "lose" ? C.red : C.muted 
-                    }}>
-                      {result.mainMarket.result === "win" ? "✅ Verde" : 
-                       result.mainMarket.result === "lose" ? "❌ Vermelho" : "—"}
-                    </span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
           </div>
         </div>
       )}

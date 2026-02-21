@@ -1544,3 +1544,18 @@ body {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ── Odd Quality Tags ── */
+.selection-tag.tag-noodd {
+  background: #ff1744;
+  color: white;
+  border: 1px solid #ff1744;
+  font-weight: 800;
+}
+
+.selection-tag.tag-lowodd {
+  background: #ff9100;
+  color: white;
+  border: 1px solid #ff9100;
+  font-weight: 800;
+}

@@ -1,4 +1,15 @@
-import { parseCSV, getOddForLabel, classifyProfile, getFavorito, computeConfidence, computeScore, calculateValueBet, getMinOddForLabel, suggestMainMarket, suggestCombo } from "../engine";
+import { parseCSV, getOddForLabel, classifyProfile, getFavorito, computeConfidence, computeScore, calculateValueBet, getMinOddForLabel, suggestMainMarket, suggestCombo, detectPoisonTriggers } from "../engine";
+import type { PreMatchOdds } from "./footballApi";
+
+// ── CONSTANTES DE QUALIDADE ──────────────────────────────────────────────────
+const MIN_USEFUL_ODD = 1.20; // Odd mínima para uma perna ser operável
+const MIN_COMBINED_ODD: Record<string, number> = {
+  bronze: 1.50,    // SEGURO (2 pernas)
+  silver: 2.00,    // PADRÃO (3 pernas)
+  gold: 3.00,      // FORTE (4 pernas)
+  agressivo: 5.00, // AGRESSIVO (5 pernas)
+  bingo: 8.00,     // BINGO (6 pernas)
+};
 
 export interface LiveMultipleSuggestion {
   id: string;
@@ -19,6 +30,7 @@ export interface LiveMultipleSuggestion {
     reason: string;
     gameProfile: string;
     confidence: number;
+    oddTag?: string; // 🆕 Tag visual: "SEM ODD", "ODD BAIXA"
   }>;
   combinedOdd: number;
   suggestedStake: number;
@@ -30,6 +42,9 @@ export interface LiveMultipleSuggestion {
 export class PreLiveMultipleAnalyzer {
   private static instance: PreLiveMultipleAnalyzer;
   private static suggestionCounter = 0; // Contador para chaves únicas
+
+  // 🆕 Mapa de odds reais injetadas via API-Football
+  private realOddsMap: Record<string, Record<string, number>> = {}; // matchKey → { marketLabel → odd }
 
   static getInstance(): PreLiveMultipleAnalyzer {
     if (!PreLiveMultipleAnalyzer.instance) {
@@ -69,7 +84,52 @@ export class PreLiveMultipleAnalyzer {
     );
   }
 
-  // 🔧 Mover função para método da classe para ter acesso ao this
+  /** Injeta odds reais obtidas da API-Football */
+  injectRealOdds(oddsMap: Record<number, PreMatchOdds>, fixtureMap: Record<string, number>): void {
+    this.realOddsMap = {};
+    for (const [matchKey, fixtureId] of Object.entries(fixtureMap)) {
+      const odds = oddsMap[fixtureId];
+      if (odds?.markets) {
+        this.realOddsMap[matchKey] = odds.markets;
+      }
+    }
+    console.log(`[ODDS-INJECT] ${Object.keys(this.realOddsMap).length} jogos com odds reais injetadas`);
+  }
+
+  /** Busca a melhor odd disponível para um mercado: real API > CSV > null */
+  private getBestOdd(game: any, marketLabel: string): number | null {
+    const matchKey = game?.match || `${game?.home || ''} x ${game?.away || ''}`;
+    
+    // 1. Tentar odd real da API-Football
+    const realMarkets = this.realOddsMap[matchKey];
+    if (realMarkets) {
+      // Busca exata
+      if (realMarkets[marketLabel]) return realMarkets[marketLabel];
+      
+      // Busca fuzzy: "Finalizações HT Over 5.5" → procurar "Over 5.5" nos mercados reais
+      const nl = marketLabel.toLowerCase();
+      for (const [key, odd] of Object.entries(realMarkets)) {
+        const nk = key.toLowerCase();
+        // Match Over X.5 lines
+        const lineMatch = nl.match(/over\s+(\d+\.\d+)/);
+        if (lineMatch && nk.includes(`over ${lineMatch[1]}`)) {
+          // Verificar se é o mesmo tipo de mercado
+          if (nl.includes('finaliz') && nk.includes('finaliz')) return odd;
+          if (nl.includes('canto') && nk.includes('canto')) return odd;
+          if (nl.includes('gol') && nk.includes('gol')) return odd;
+          if (nl.includes('ft') && nk.includes('ft') && !nl.includes('canto')) return odd;
+        }
+        if (nl.includes('ambas marcam') && nk.includes('ambas marcam')) return odd;
+        if (nl.includes('btts') && nk.includes('btts')) return odd;
+      }
+    }
+    
+    // 2. Fallback: odd do CSV
+    const csvOdd = getOddForLabel(game, marketLabel);
+    return (typeof csvOdd === 'number' && !isNaN(csvOdd) && csvOdd > 1) ? csvOdd : null;
+  }
+
+  // 🔧 Seleção com filtro de odd mínima
   private getUniqueSelection(game: any, usedSignatures: Set<string>): any {
     const options = suggestCombo(game) || [];
     for (const opt of options) {
@@ -85,6 +145,12 @@ export class PreLiveMultipleAnalyzer {
         continue;
       }
 
+      // 🆕 FILTRO DE ODD MÍNIMA
+      const bestOdd = this.getBestOdd(game, opt.label);
+      if (bestOdd && bestOdd < MIN_USEFUL_ODD) {
+        console.log(`[ODD-FILTER] Odd baixa rejeitada: ${opt.label} @ ${bestOdd.toFixed(2)} < ${MIN_USEFUL_ODD}`);
+        continue; // Tenta próximo mercado
+      }
 
       const signature = `${game.home}_${opt.label}`;
       if (!usedSignatures.has(signature)) {
@@ -96,7 +162,7 @@ export class PreLiveMultipleAnalyzer {
   }
 
   // Analisa CSV do dia para gerar múltiplas pré-live
-  analyzeLiveMultiples(csvText: string): {
+  analyzeLiveMultiples(csvText: string, oddsMap?: Record<number, PreMatchOdds>, fixtureMap?: Record<string, number>): {
     suggestions: LiveMultipleSuggestion[];
     summary: {
       totalGames: number;
@@ -138,6 +204,11 @@ export class PreLiveMultipleAnalyzer {
             avgConfidence: 0
           }
         };
+      }
+      
+      // 🆕 Injeta odds reais se fornecidas
+      if (oddsMap && fixtureMap) {
+        this.injectRealOdds(oddsMap, fixtureMap);
       }
       
       // Gera múltiplas baseadas em confluência de perfis
@@ -182,7 +253,8 @@ export class PreLiveMultipleAnalyzer {
 
     // Função para construir seleção
     const buildSelection = (g: any, marketLabel: string, baseReason: string) => {
-      const odd = getOddForLabel(g, marketLabel);
+      // 🆕 Usa getBestOdd (API > CSV)
+      const odd = this.getBestOdd(g, marketLabel);
       const confResult = computeConfidence(g);
       const conf = (confResult as any)?.score || 0;
       const scoreResult = computeScore(g);
@@ -196,6 +268,12 @@ export class PreLiveMultipleAnalyzer {
       const edge = hasOdd ? (value?.edge ?? 0) : 0;
       const hasValue = hasOdd ? !!value?.hasValue : false;
       const recommendation = hasOdd ? (value?.recommendation ?? "") : "Sem odd";
+      
+      // 🆕 Tags de qualidade da odd
+      let oddTag = "";
+      if (!hasOdd) oddTag = "SEM ODD";
+      else if (odd < MIN_USEFUL_ODD) oddTag = "ODD BAIXA";
+      
       return {
         match: g?.match || `${g?.home || ""} x ${g?.away || ""}`.trim(),
         league: g?.league || "—",
@@ -204,6 +282,7 @@ export class PreLiveMultipleAnalyzer {
         odd: hasOdd ? odd : 0,
         minOdd: minOdd || 0,
         hasValue, edge, recommendation,
+        oddTag, // 🆕 Tag visual
         reason: [baseReason, hasOdd ? `${recommendation} · Edge ${edge}%` : "Sem odd no CSV"].filter(Boolean).join(" · "),
         gameProfile: profile || "generic",
         confidence: Math.round(conf * 100),
@@ -230,6 +309,14 @@ export class PreLiveMultipleAnalyzer {
       }
       if (selections.length < Math.min(nLegs, 2)) return null; // mínimo 2 pernas
       const combinedOdd = selections.reduce((acc, s) => acc * (s.odd > 1 ? s.odd : 1), 1);
+      
+      // 🆕 FILTRO DE ODD COMBINADA MÍNIMA
+      const minCombined = MIN_COMBINED_ODD[typeId] || 1.50;
+      if (combinedOdd < minCombined) {
+        console.log(`[COMBINED-ODD-FILTER] Bilhete rejeitado: ${typeId} odd ${combinedOdd.toFixed(2)} < ${minCombined}`);
+        return null;
+      }
+      
       const avgConf = selections.reduce((acc, s) => acc + (s.confidence / 100), 0) / selections.length;
       const expectedValue = (combinedOdd * avgConf) - 1;
       return {

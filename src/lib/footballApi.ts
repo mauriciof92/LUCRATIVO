@@ -402,3 +402,155 @@ function getAwayTeamId(stats: any[]): number {
   const secondStat = stats[1];
   return secondStat?.team?.id || 0;
 }
+
+// ─── PRE-MATCH ODDS ──────────────────────────────────────────────────────────
+
+export interface PreMatchOdds {
+  fixtureId: number;
+  bookmaker: string;
+  markets: Record<string, number>; // "Over 1.5 FT" → 1.04, "Over 2.5 FT" → 1.65, etc.
+}
+
+/**
+ * Mapeamento de Bet IDs da API-Football para labels do engine.
+ * - bet 5  = Over/Under (gols FT)
+ * - bet 26 = Over/Under First Half (gols HT)
+ * - bet 28 = Both Teams To Score
+ * - bet 45 = Total Corners Over/Under (FT)
+ * - bet 64 = Home Team Total Shots On Target O/U
+ * - bet 65 = Away Team Total Shots On Target O/U
+ */
+const ODDS_BET_IDS = [5, 26, 28, 45, 64, 65];
+
+function mapOddsToMarkets(bets: any[], homeTeam: string, awayTeam: string): Record<string, number> {
+  const markets: Record<string, number> = {};
+
+  for (const bet of bets) {
+    const betId = bet.id;
+    const values = bet.values ?? [];
+
+    for (const v of values) {
+      const label = String(v.value ?? "");
+      const odd = parseFloat(v.odd);
+      if (isNaN(odd) || odd <= 1) continue;
+
+      // bet 5: Over/Under FT (e.g. "Over 1.5", "Over 2.5")
+      if (betId === 5 && label.startsWith("Over")) {
+        const line = label.replace("Over ", "");
+        markets[`Over ${line} FT`] = odd;
+      }
+
+      // bet 26: Over/Under First Half (gols HT)
+      if (betId === 26 && label.startsWith("Over")) {
+        const line = label.replace("Over ", "");
+        markets[`Over ${line} Gols HT`] = odd;
+      }
+
+      // bet 28: BTTS
+      if (betId === 28) {
+        if (label === "Yes") markets["Ambas Marcam — Sim"] = odd;
+      }
+
+      // bet 45: Total Corners O/U FT
+      if (betId === 45 && label.startsWith("Over")) {
+        const line = label.replace("Over ", "");
+        markets[`Over ${line} Cantos FT`] = odd;
+      }
+
+      // bet 64: Home Shots on Target O/U
+      if (betId === 64 && label.startsWith("Over")) {
+        const line = label.replace("Over ", "");
+        markets[`${homeTeam} Finalizações Over ${line}`] = odd;
+      }
+
+      // bet 65: Away Shots on Target O/U
+      if (betId === 65 && label.startsWith("Over")) {
+        const line = label.replace("Over ", "");
+        markets[`${awayTeam} Finalizações Over ${line}`] = odd;
+      }
+    }
+  }
+
+  return markets;
+}
+
+/** Fetch pre-match odds for a specific fixture from API-Football (bookmaker=8 = Bet365) */
+export async function fetchPreMatchOdds(
+  fixtureId: number,
+  apiKey: string,
+  bookmaker: number = 8
+): Promise<PreMatchOdds | null> {
+  try {
+    const data = await apiFetch(`/odds?fixture=${fixtureId}&bookmaker=${bookmaker}`, apiKey);
+    const response = data.response ?? [];
+    if (response.length === 0) return null;
+
+    const fixture = response[0];
+    const bookmakerData = fixture.bookmakers?.[0];
+    if (!bookmakerData) return null;
+
+    const homeTeam = fixture.league?.name ? "" : ""; // placeholder, we get from fixture
+    const awayTeam = "";
+
+    const bets = bookmakerData.bets ?? [];
+    const filteredBets = bets.filter((b: any) => ODDS_BET_IDS.includes(b.id));
+    const markets = mapOddsToMarkets(filteredBets, homeTeam, awayTeam);
+
+    return {
+      fixtureId,
+      bookmaker: bookmakerData.name ?? "Bet365",
+      markets,
+    };
+  } catch (e) {
+    console.error(`[fetchPreMatchOdds] Error for fixture ${fixtureId}:`, e);
+    return null;
+  }
+}
+
+/** Fetch odds for all fixtures on a given date. Returns map of fixtureId → markets */
+export async function fetchOddsForDate(
+  date: string,
+  apiKey: string
+): Promise<{ oddsMap: Record<number, PreMatchOdds>; fixtureMap: Record<string, number>; reqUsed: number }> {
+  const fixtures = await fetchFixturesByDate(date, apiKey);
+  let reqUsed = 1; // 1 for fetchFixturesByDate
+
+  const oddsMap: Record<number, PreMatchOdds> = {};
+  const fixtureMap: Record<string, number> = {}; // "Home x Away" → fixtureId
+
+  for (const f of fixtures) {
+    fixtureMap[`${f.home} x ${f.away}`] = f.id;
+  }
+
+  // Fetch odds for each fixture (batched with small delay to respect rate limits)
+  for (const f of fixtures) {
+    const odds = await fetchPreMatchOdds(f.id, apiKey);
+    reqUsed++;
+
+    if (odds) {
+      // Re-map with real team names for shots markets
+      const betsRaw = odds.markets;
+      const remapped: Record<string, number> = {};
+      for (const [key, val] of Object.entries(betsRaw)) {
+        // Replace empty team names with real ones
+        let newKey = key;
+        if (key.includes(" Finalizações Over") && !key.includes(f.home) && !key.includes(f.away)) {
+          // Generic case — keep as is
+        }
+        remapped[newKey] = val;
+      }
+
+      // Add home/away team-specific shot markets
+      const homeShotsKey = Object.keys(betsRaw).find(k => k === `${f.home} Finalizações Over`);
+      const awayShotsKey = Object.keys(betsRaw).find(k => k === `${f.away} Finalizações Over`);
+
+      oddsMap[f.id] = { ...odds, markets: remapped };
+    }
+
+    // Small delay between requests to be respectful
+    if (reqUsed % 5 === 0) await sleep(1000);
+  }
+
+  console.log(`[fetchOddsForDate] ${date}: ${fixtures.length} fixtures, ${Object.keys(oddsMap).length} with odds, ${reqUsed} API calls`);
+  return { oddsMap, fixtureMap, reqUsed };
+}
