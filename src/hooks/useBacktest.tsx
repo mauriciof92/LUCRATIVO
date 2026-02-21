@@ -231,28 +231,32 @@ export const useBacktest = () => {
 
       // Salvar no Supabase com dados completos (incluindo favorito e combo)
       if (supabaseConfigured) {
-        const upsertRows = results.map(r => ({
-          id: r.id,
-          match: r.match,
-          league: r.league,
-          hour: r.hour,
-          status: r.status,
-          result_home: r.resultHome,
-          result_away: r.resultAway,
-          profile: r.profile,
-          score: r.score,
-          confidence: r.confidence,
-          main_market_label: r.mainMarket.label,
-          main_market_odd: r.mainMarket.odd,
-          main_market_result: r.mainMarket.result,
-          main_market_profit: r.mainMarket.profit,
-          favorito_data: JSON.stringify(r.favorito ?? {}),
-          combo_data: JSON.stringify(r.combo ?? []),
-          poison_data: JSON.stringify(r.poison ?? {}),
-        }));
-        const { error: upsertErr } = await supabase.from('bet_results').upsert(upsertRows, { onConflict: 'id' });
-        if (upsertErr) console.warn('[CSV-IMPORT] Supabase upsert warning:', upsertErr.message);
-        else console.log(`[CSV-IMPORT] ${upsertRows.length} jogos salvos no Supabase`);
+        try {
+          const upsertRows = results.map(r => ({
+            id: r.id,
+            match: r.match,
+            league: r.league,
+            hour: r.hour,
+            status: r.status,
+            result_home: r.resultHome,
+            result_away: r.resultAway,
+            profile: r.profile,
+            score: r.score,
+            confidence: r.confidence,
+            main_market_label: r.mainMarket.label,
+            main_market_odd: r.mainMarket.odd,
+            main_market_result: r.mainMarket.result,
+            main_market_profit: r.mainMarket.profit,
+            favorito_data: JSON.stringify(r.favorito ?? {}),
+            combo_data: JSON.stringify(r.combo ?? []),
+            poison_data: JSON.stringify(r.poison ?? {}),
+          }));
+          const { error: upsertErr } = await supabase.from('bet_results').upsert(upsertRows, { onConflict: 'id' });
+          if (upsertErr) console.warn('[CSV-IMPORT] Supabase upsert warning:', upsertErr.message);
+          else console.log(`[CSV-IMPORT] ${upsertRows.length} jogos salvos no Supabase`);
+        } catch (e) {
+          console.warn('[CSV-IMPORT] Supabase indisponível (CORS/rede) — dados salvos apenas no cache local');
+        }
       }
 
       // Salvar no cache local como backup
