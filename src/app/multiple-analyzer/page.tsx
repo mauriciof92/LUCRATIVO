@@ -224,7 +224,7 @@ export default function MultipleAnalyzerPage() {
                           {style.icon} {style.label}
                         </div>
                         <div style={{ color: C.muted, fontSize: 12 }}>
-                          {nLegs} pernas · Stake R$ {s.suggestedStake?.toFixed(2) ?? '25.00'}
+                          {new Set(s.selections?.map((sel: any) => sel.match)).size} jogos · {nLegs} mercados · Stake R$ {s.suggestedStake?.toFixed(2) ?? '25.00'}
                         </div>
                       </div>
                       <div style={{ textAlign: 'right' }}>

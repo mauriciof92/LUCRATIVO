@@ -2,21 +2,17 @@ import { parseCSV, getOddForLabel, classifyProfile, getFavorito, computeConfiden
 import type { PreMatchOdds } from "./footballApi";
 
 // ── CONSTANTES DE QUALIDADE ──────────────────────────────────────────────────
-const MIN_USEFUL_ODD = 1.20; // Odd mínima para uma perna ser operável
-const MAX_USEFUL_ODD = 2.50; // Odd máxima — acima disso é risco demais para bilhete "pra bater"
-const MIN_COMBINED_ODD: Record<string, number> = {
-  bronze: 1.50,    // SEGURO (2 pernas)
-  silver: 2.00,    // PADRÃO (3 pernas)
-  gold: 3.00,      // FORTE (4 pernas)
-  agressivo: 4.00, // AGRESSIVO (5 pernas)
-  bingo: 5.00,     // BINGO (6 pernas)
-};
-const MAX_COMBINED_ODD: Record<string, number> = {
-  bronze: 4.00,    // SEGURO: teto 4x
-  silver: 7.00,    // PADRÃO: teto 7x
-  gold: 12.00,     // FORTE: teto 12x
-  agressivo: 18.00,// AGRESSIVO: teto 18x
-  bingo: 30.00,    // BINGO: teto 30x
+const MIN_MARKET_ODD = 1.10;  // Odd mínima por mercado individual (SGP)
+const MAX_MARKET_ODD = 2.50;  // Odd máxima por mercado individual
+const MIN_GAME_ODD = 1.30;    // Odd mínima por jogo (produto dos mercados do jogo)
+const MAX_GAME_ODD = 3.00;    // Odd máxima por jogo
+// Tiers baseados em número de JOGOS (cada jogo = 2-3 mercados Bet Builder)
+const TIER_CONFIG: Record<string, { nGames: number; marketsPerGame: number; stake: number; minTotal: number; maxTotal: number }> = {
+  bronze:    { nGames: 2, marketsPerGame: 2, stake: 50, minTotal: 2.0,  maxTotal: 6.0  },
+  silver:    { nGames: 3, marketsPerGame: 2, stake: 35, minTotal: 3.0,  maxTotal: 10.0 },
+  gold:      { nGames: 3, marketsPerGame: 3, stake: 25, minTotal: 4.0,  maxTotal: 15.0 },
+  agressivo: { nGames: 4, marketsPerGame: 2, stake: 15, minTotal: 5.0,  maxTotal: 25.0 },
+  bingo:     { nGames: 5, marketsPerGame: 2, stake: 10, minTotal: 6.0,  maxTotal: 40.0 },
 };
 // Qualidade mínima por jogo (gate de entrada)
 const MIN_SCORE = 0.65;  // Score ≥ 65%
@@ -196,11 +192,47 @@ export class PreLiveMultipleAnalyzer {
     return true;
   }
 
-  // Verifica se odd está na faixa operável (1.20–2.50)
+  // Verifica se odd está na faixa operável por mercado individual (1.10–2.50)
   private isOddInRange(odd: number | null): boolean {
-    if (!odd || odd < MIN_USEFUL_ODD) return false;
-    if (odd > MAX_USEFUL_ODD) return false;
+    if (!odd || odd < MIN_MARKET_ODD) return false;
+    if (odd > MAX_MARKET_ODD) return false;
     return true;
+  }
+
+  // 🎯 Extrai MÚLTIPLOS mercados complementares de eixos diferentes para um jogo (Bet Builder)
+  private getGameMarkets(game: any, usedSigs: Set<string>, maxMarkets: number): any[] {
+    const combo = suggestCombo(game) || [];
+    const main = suggestMainMarket(game);
+    const allCandidates: any[] = [...combo];
+    if (main?.label) allCandidates.push(main);
+
+    // Ordenar por especificidade
+    allCandidates.sort((a: any, b: any) => this.marketSpecificity(b.label) - this.marketSpecificity(a.label));
+
+    const selected: any[] = [];
+    const usedAxes = new Set<string>(); // Não repetir mesmo eixo no mesmo jogo
+
+    for (const opt of allCandidates) {
+      if (selected.length >= maxMarkets) break;
+      if (!opt?.label) continue;
+      if (!this.isLabelAllowed(opt.label, game.league || '')) continue;
+
+      // Não repetir mesmo eixo no mesmo jogo (ex: 2 linhas de chutes_ht)
+      const axis = (opt as any).axis || '';
+      if (axis && usedAxes.has(axis)) continue;
+
+      const bestOdd = this.getBestOdd(game, opt.label);
+      if (!this.isOddInRange(bestOdd)) continue;
+
+      const sig = `${game.home}_${opt.label}`;
+      if (usedSigs.has(sig)) continue;
+
+      selected.push({ ...opt, _resolvedOdd: bestOdd });
+      usedSigs.add(sig);
+      if (axis) usedAxes.add(axis);
+    }
+
+    return selected;
   }
 
   // Analisa CSV do dia para gerar múltiplas pré-live
@@ -282,14 +314,11 @@ export class PreLiveMultipleAnalyzer {
     const topGames = [...games].sort((a, b) => {
       const poisonA = detectPoisonTriggers(a);
       const poisonB = detectPoisonTriggers(b);
-      // Poison ativo sobe ao topo
       if (poisonA.isPoison && !poisonB.isPoison) return -1;
       if (!poisonA.isPoison && poisonB.isPoison) return 1;
-      // Dentro dos Poison, nível mais forte primeiro
       if (poisonA.isPoison && poisonB.isPoison) {
         if (poisonA.highestLevel !== poisonB.highestLevel) return poisonA.highestLevel - poisonB.highestLevel;
       }
-      // Depois por score
       const sA = computeScore(a); const sB = computeScore(b);
       const scoreA = typeof sA === 'number' ? sA : (sA as any)?.score || 0;
       const scoreB = typeof sB === 'number' ? sB : (sB as any)?.score || 0;
@@ -298,9 +327,8 @@ export class PreLiveMultipleAnalyzer {
 
     if (topGames.length < 2) return suggestions;
 
-    // Função para construir seleção
-    const buildSelection = (g: any, marketLabel: string, baseReason: string) => {
-      const odd = this.getBestOdd(g, marketLabel);
+    // Converte mercados de um jogo em seleções flat para o bilhete
+    const buildSelections = (g: any, markets: any[], reason: string) => {
       const confResult = computeConfidence(g);
       const conf = (confResult as any)?.score || 0;
       const scoreResult = computeScore(g);
@@ -308,94 +336,97 @@ export class PreLiveMultipleAnalyzer {
       const profile = classifyProfile(g);
       const fav = getFavorito(g);
       const poison = detectPoisonTriggers(g);
-      const hasOdd = typeof odd === "number" && !isNaN(odd) && odd > 1;
-
       const poisonTag = poison.isPoison ? ` ${poison.primaryTrigger?.icon} ${poison.primaryTrigger?.tag}` : '';
+      const matchName = g?.match || `${g?.home || ""} x ${g?.away || ""}`.trim();
 
-      return {
-        match: g?.match || `${g?.home || ""} x ${g?.away || ""}`.trim(),
+      return markets.map((m: any) => ({
+        match: matchName,
         league: g?.league || "—",
         hour: g?.hour || "—",
-        market: marketLabel,
-        odd: hasOdd ? odd : 0,
+        market: m.label,
+        odd: m._resolvedOdd || 0,
         minOdd: 0,
-        hasValue: hasOdd,
+        hasValue: true,
         edge: 0,
-        recommendation: hasOdd ? "Operável" : "Sem odd",
-        oddTag: !hasOdd ? "SEM ODD" : "",
-        reason: `${baseReason}${poisonTag}`,
+        recommendation: "Operável",
+        oddTag: "",
+        reason: `${reason}${poisonTag}`,
         gameProfile: profile || "generic",
         confidence: Math.round(conf * 100),
         _meta: { score, fav: (fav as any)?.nome || "" },
-      } as any;
+      }));
     };
 
-    // Pool GLOBAL — mesmo jogo NÃO repete entre bilhetes (1 perna perde ≠ mata 2 bilhetes)
-    const globalUsedGames = new Set<string>();
-    const globalUsedSigs  = new Set<string>();
+    // Pool GLOBAL por LINHA — mesma linha (jogo+mercado) não repete entre bilhetes
+    // Mesmo jogo PODE repetir com mercado DIFERENTE em outro bilhete
+    const globalUsedSigs = new Set<string>();
 
-    const buildTicket = (
-      nLegs: number,
+    // Bet Builder: N jogos × K mercados por jogo
+    const buildSGPTicket = (
       typeId: string,
       riskLevel: LiveMultipleSuggestion['riskLevel'],
-      stake: number,
       reason: string
     ): LiveMultipleSuggestion | null => {
-      const selections: any[] = [];
+      const tier = TIER_CONFIG[typeId];
+      if (!tier) return null;
+
+      const allSelections: any[] = [];
+      let gamesUsed = 0;
+
       for (const g of topGames) {
-        if (selections.length >= nLegs) break;
-        // Mesmo JOGO não pode aparecer em bilhetes diferentes
-        const gameKey = g.home || g.match || '';
-        if (globalUsedGames.has(gameKey)) continue;
-        const sel = this.getSafeSelection(g, globalUsedSigs);
-        if (sel) {
-          selections.push(buildSelection(g, sel.label, reason));
-          globalUsedGames.add(gameKey);
-        }
+        if (gamesUsed >= tier.nGames) break;
+
+        // Extrai 2-3 mercados complementares deste jogo
+        const markets = this.getGameMarkets(g, globalUsedSigs, tier.marketsPerGame);
+        if (markets.length < 2) continue; // Mínimo 2 mercados por jogo para valer como SGP
+
+        // Odd combinada deste jogo
+        const gameOdd = markets.reduce((acc: number, m: any) => acc * (m._resolvedOdd || 1), 1);
+        if (gameOdd < MIN_GAME_ODD || gameOdd > MAX_GAME_ODD) continue;
+
+        allSelections.push(...buildSelections(g, markets, reason));
+        gamesUsed++;
       }
-      if (selections.length < Math.min(nLegs, 2)) return null;
 
-      // Todas as pernas devem ter odd
-      const allHaveOdds = selections.every((s: any) => s.odd > 1);
-      if (!allHaveOdds) return null;
+      if (gamesUsed < Math.min(tier.nGames, 2)) return null;
 
-      const combinedOdd = selections.reduce((acc: number, s: any) => acc * s.odd, 1);
+      // Todas devem ter odd
+      if (allSelections.some((s: any) => !s.odd || s.odd <= 1)) return null;
 
-      // Filtro de odd combinada: piso e teto
-      const minCombined = MIN_COMBINED_ODD[typeId] || 1.50;
-      const maxCombined = MAX_COMBINED_ODD[typeId] || 10.0;
-      if (combinedOdd < minCombined || combinedOdd > maxCombined) return null;
+      const combinedOdd = allSelections.reduce((acc: number, s: any) => acc * s.odd, 1);
+      if (combinedOdd < tier.minTotal || combinedOdd > tier.maxTotal) return null;
 
-      const avgConf = selections.reduce((acc: number, s: any) => acc + (s.confidence / 100), 0) / selections.length;
+      const avgConf = allSelections.reduce((acc: number, s: any) => acc + (s.confidence / 100), 0) / allSelections.length;
       const expectedValue = (combinedOdd * avgConf) - 1;
+
       return {
         id: `${typeId}_${Date.now()}_${++PreLiveMultipleAnalyzer.suggestionCounter}`,
         type: typeId as any,
         confidence: Math.round(avgConf * 100),
         expectedValue,
         riskLevel,
-        selections,
+        selections: allSelections,
         combinedOdd,
-        suggestedStake: stake,
-        expectedReturn: combinedOdd * stake,
+        suggestedStake: tier.stake,
+        expectedReturn: combinedOdd * tier.stake,
         riskReward: expectedValue > 0.08 ? "Excelente" : expectedValue > 0.04 ? "Bom" : "Moderado",
       };
     };
 
-    // 5 perfis de bilhete — cada perna filtrada por confluência real (odd 1.20–2.50)
-    const seguro = buildTicket(2, 'bronze', 'low', 50, '🛡️ Seguro');
+    // 5 perfis — cada jogo contribui 2-3 mercados complementares (Bet Builder)
+    const seguro = buildSGPTicket('bronze', 'low', '🛡️ Seguro');
     if (seguro) suggestions.push(seguro);
 
-    const padrao = buildTicket(3, 'silver', 'low', 35, '⚖️ Padrão');
+    const padrao = buildSGPTicket('silver', 'low', '⚖️ Padrão');
     if (padrao) suggestions.push(padrao);
 
-    const forte = buildTicket(4, 'gold', 'medium', 25, '💪 Forte');
+    const forte = buildSGPTicket('gold', 'medium', '💪 Forte');
     if (forte) suggestions.push(forte);
 
-    const agressivo = buildTicket(5, 'agressivo', 'medium', 15, '🚀 Agressivo');
+    const agressivo = buildSGPTicket('agressivo', 'medium', '🚀 Agressivo');
     if (agressivo) suggestions.push(agressivo);
 
-    const bingo = buildTicket(6, 'bingo', 'high', 10, '💣 Bingo');
+    const bingo = buildSGPTicket('bingo', 'high', '💣 Bingo');
     if (bingo) suggestions.push(bingo);
 
     return suggestions;
