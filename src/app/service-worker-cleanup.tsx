@@ -4,9 +4,20 @@ import { useEffect } from 'react'
 
 export default function ServiceWorkerCleanup() {
   useEffect(() => {
-    // Forçar cleanup AGRESSIVO de qualquer cache que possa estar servindo JS antigo
+    // Rodar cleanup apenas se não tiver sido executado antes (verificar flag)
     if (typeof window !== 'undefined') {
+      const cleanupFlag = 'lucrativo-nuke-done';
+      
+      // Se já fez cleanup, não fazer novamente
+      if (sessionStorage.getItem(cleanupFlag)) {
+        console.log('[NUKE] Cleanup já executado nesta sessão');
+        return;
+      }
+      
       console.log('[NUKE] Iniciando limpeza nuclear de cache...');
+      
+      // Marcar que vai fazer cleanup para evitar loop
+      sessionStorage.setItem(cleanupFlag, 'true');
       
       // 1. Limpar Service Workers
       if ('serviceWorker' in navigator) {
@@ -37,11 +48,16 @@ export default function ServiceWorkerCleanup() {
       keysToRemove.forEach(key => localStorage.removeItem(key));
       console.log('[NUKE] localStorage limpo');
       
-      // 4. Forçar reload com cache-buster
-      const timestamp = Date.now();
-      const currentUrl = window.location.href.split('?')[0];
-      console.log('[NUKE] Forçando reload limpo...');
-      window.location.replace(`${currentUrl}?v=${timestamp}`);
+      // 4. Forçar reload apenas se não tiver timestamp na URL
+      const urlParams = new URLSearchParams(window.location.search);
+      if (!urlParams.has('v')) {
+        const timestamp = Date.now();
+        const currentUrl = window.location.href.split('?')[0];
+        console.log('[NUKE] Forçando reload com timestamp...');
+        window.location.replace(`${currentUrl}?v=${timestamp}`);
+      } else {
+        console.log('[NUKE] URL já tem timestamp, cleanup completo');
+      }
     }
   }, []);
   
