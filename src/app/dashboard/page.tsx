@@ -5,45 +5,9 @@ import { useRouter } from "next/navigation";
 import { NavHeader } from "../../components/NavHeader";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { useBacktest, STAKE_FIXA } from "../../hooks/useBacktest";
-
-const C = {
-  bg: "#0d1117",
-  surface: "#161b22",
-  border: "#30363d",
-  text: "#e6edf3",
-  muted: "#8b949e",
-  green: "#3fb950",
-  red: "#f85149",
-  blue: "#58a6ff",
-  gold: "#d29922",
-  elite: "#f0c040",
-  purple: "#bc8cff",
-};
+import { C, KPI as KpiCard, EmptyState, mktCat as catLabel } from "../../components/ui";
 
 type Period = 7 | 30 | 90;
-
-function KpiCard({ label, value, sub, color = C.text }: { label: string; value: string; sub?: string; color?: string }) {
-  return (
-    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 24px", flex: 1, minWidth: 160 }}>
-      <div style={{ color: C.muted, fontSize: 12, marginBottom: 6 }}>{label}</div>
-      <div style={{ color, fontSize: 24, fontWeight: 700 }}>{value}</div>
-      {sub && <div style={{ color: C.muted, fontSize: 11, marginTop: 4 }}>{sub}</div>}
-    </div>
-  );
-}
-
-const catLabel = (label: string) => {
-  const l = label.toLowerCase();
-  if (l.includes("finaliz") || l.includes("chute")) return "Finalizações HT";
-  if (l.includes("canto") && (l.includes("ht") || l.includes("1t"))) return "Cantos HT";
-  if (l.includes("canto")) return "Cantos FT";
-  if (l.includes("over 2.5")) return "Over 2.5 FT";
-  if (l.includes("over 1.5")) return "Over 1.5 FT";
-  if (l.includes("btts") || l.includes("ambas")) return "BTTS";
-  if (l.includes("over 0.5")) return "Gols HT";
-  if (l.includes("vence")) return "Fav Vence";
-  return "Outros";
-};
 
 export default function Dashboard() {
   const router = useRouter();
@@ -235,19 +199,13 @@ export default function Dashboard() {
         )}
 
         {confirmed.length === 0 && !loading && (
-          <div style={{ textAlign: "center", padding: "60px 0", color: C.muted }}>
-            <div style={{ fontSize: 40, marginBottom: 16 }}>📊</div>
-            <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>
-              {results.length > 0 ? `Nenhuma aposta confirmada nos últimos ${period} dias` : "Nenhum dado para analisar"}
-            </div>
-            <div style={{ fontSize: 14, marginBottom: 24 }}>
-              {results.length > 0 ? "Os jogos ainda não têm resultado (win/lose) definido." : "Importe dados pelo Admin para começar."}
-            </div>
-            <button onClick={() => router.push("/admin")} style={{
-              background: C.blue, color: "#000", border: "none", borderRadius: 8,
-              padding: "10px 24px", cursor: "pointer", fontWeight: 700, fontSize: 14,
-            }}>⚙️ Ir para Admin</button>
-          </div>
+          <EmptyState
+            icon="📊"
+            title={results.length > 0 ? `Nenhuma aposta confirmada nos últimos ${period} dias` : "Nenhum dado para analisar"}
+            subtitle={results.length > 0 ? "Os jogos ainda não têm resultado (win/lose) definido." : "Importe dados pelo Admin para começar."}
+            actionLabel="⚙️ Ir para Admin"
+            actionHref="/admin"
+          />
         )}
 
       </div>

@@ -66,7 +66,7 @@ export interface BacktestSummary {
   withoutValue: { bets: number; stake: number; profit: number; roi: number; hitRate: number };
 }
 
-function resolveMarketResult(label: string, game: any): "win" | "lose" | "push" | "no-odd" | "avg" {
+export function resolveMarketResult(label: string, game: any): "win" | "lose" | "push" | "no-odd" | "avg" {
   const home = game.resultHome ?? 0;
   const away = game.resultAway ?? 0;
   const ft = home + away;
@@ -143,6 +143,78 @@ function resolveMarketResult(label: string, game: any): "win" | "lose" | "push" 
   }
   
   return "no-odd";
+}
+
+/**
+ * Processa jogos NS (Not Started) — caminho pré-live.
+ * Aplica engine completo (score, profile, mercados, favorito, poison)
+ * mas NÃO resolve resultado (resultado = "no-odd" / pendente).
+ */
+export function processNSGames(csvText: string): BetResult[] {
+  const { games } = parseCSV(csvText);
+  // Pegar TODOS os jogos (NS, FT, etc.)
+  const results: BetResult[] = [];
+
+  for (const g of games) {
+    const score = computeScore(g);
+    const scoreVal = typeof score === 'number' ? score : score?.score ?? 0;
+    const profile = classifyProfile(g);
+    const main = suggestMainMarket(g);
+    if (!main) continue; // score < 0.50 → bloqueado
+    const combo = suggestCombo(g);
+    const confidence = computeConfidence(g).score;
+    const fav = getFavorito(g);
+    const poison = detectPoisonTriggers(g);
+
+    const mainOdd = getOddForLabel(g, main.label);
+    const mainMinOdd = getMinOddForLabel(main.label);
+    const valueAnalysis = calculateValueBet(g, main.label, mainOdd);
+    const isFT = g.status === 'FT';
+
+    // Para jogos FT, resolver resultado; para NS, manter "no-odd"
+    const mainResult = isFT ? resolveMarketResult(main.label, g) : "no-odd";
+    const stake = 25; // STAKE_FIXA
+    const mainProfit = mainResult === "win" ? (mainOdd ?? 0) * stake - stake
+                     : mainResult === "lose" ? -stake : 0;
+
+    const comboResults = combo.map(item => {
+      const odd = getOddForLabel(g, item.label);
+      const minOdd = getMinOddForLabel(item.label);
+      const val = calculateValueBet(g, item.label, odd);
+      const result = isFT ? resolveMarketResult(item.label, g) : "no-odd";
+      const profit = result === "win" ? (odd ?? 0) * stake - stake
+                   : result === "lose" ? -stake : 0;
+      return { label: item.label, odd, minOdd, stake, result, profit, hasValue: !!val?.hasValue };
+    });
+
+    results.push({
+      id: String(g.id),
+      match: g.match,
+      league: g.league,
+      hour: g.hour,
+      status: g.status,
+      resultHome: g.resultHome ?? 0,
+      resultAway: g.resultAway ?? 0,
+      ftGoals: (g.resultHome ?? 0) + (g.resultAway ?? 0),
+      mainMarket: {
+        label: main.label,
+        odd: mainOdd,
+        minOdd: mainMinOdd,
+        stake,
+        result: mainResult,
+        profit: mainProfit,
+        hasValue: !!valueAnalysis?.hasValue,
+      },
+      combo: comboResults,
+      score: scoreVal,
+      profile,
+      confidence,
+      favorito: fav,
+      poison,
+    });
+  }
+
+  return results;
 }
 
 function stakeByConfidence(confidence: number): number {

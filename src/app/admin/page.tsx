@@ -1,23 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useBacktest } from "../../hooks/useBacktest";
 import { NavHeader } from "../../components/NavHeader";
 import { Settings, Database, Trash2, Upload, Key, AlertTriangle } from "lucide-react";
 
-const C = {
-  bg: "#0a0f1f",
-  card: "#1e293b", 
-  border: "#374151",
-  accent: "#3b82f6",
-  green: "#10b981",
-  red: "#ef4444", 
-  yellow: "#f59e0b",
-  gray: "#6b7280",
-  text: "#f9fafb",
-  muted: "#9ca3af",
-};
+import { C, KPI as SharedKPI } from "../../components/ui";
 
 export default function AdminPage() {
   const router = useRouter();
@@ -34,9 +23,20 @@ export default function AdminPage() {
     syncMissingResults,
     setFile,
     
-    // Componentes do hook
-    KPI,
+    // 🆕 Wrappers para fluxo único
+    importFromCSV,
+    enrichWithOdds,
+    
   } = useBacktest();
+
+  // 🆕 Estados para fluxo unificado
+  const [csvFile, setCsvFile] = useState<File | null>(null);
+  const [csvPreview, setCsvPreview] = useState<string>('');
+  const [processing, setProcessing] = useState(false);
+  const [processResult, setProcessResult] = useState<{
+    saved: number;
+    withOdds: number;
+  } | null>(null);
 
   // 🆕 Estados locais para Admin
   const [apiKey, setApiKey] = useState("");
@@ -48,6 +48,40 @@ export default function AdminPage() {
   useEffect(() => {
     setIsClient(true);
   }, []);
+
+  // 🆕 Handler de seleção do CSV
+  const handleCsvSelect = (file: File) => {
+    setCsvFile(file);
+    setProcessResult(null);
+    // Ler primeira linha para preview
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target?.result as string;
+      const lines = text.split('\n').filter(Boolean);
+      setCsvPreview(`${lines.length - 1} jogos encontrados`);
+    };
+    reader.readAsText(file);
+  };
+
+  // 🆕 Handler de processamento completo
+  const handleProcessar = async () => {
+    if (!csvFile) return;
+    setProcessing(true);
+    try {
+      // a) Parse + save via hook (já existente)
+      await importFromCSV(csvFile);
+      // b) Buscar odds (já existente)
+      const apiKey = localStorage.getItem('football-api-key') ?? '';
+      let withOdds = 0;
+      if (apiKey) {
+        // chama o enriquecimento existente
+        withOdds = await enrichWithOdds(apiKey);
+      }
+      setProcessResult({ saved: results.length, withOdds });
+    } finally {
+      setProcessing(false);
+    }
+  };
 
   const handleClearDatabase = async () => {
     if (!confirm("⚠️ ATENÇÃO: Isso apagará TODOS os dados do banco. Continuar?")) {
@@ -119,55 +153,84 @@ export default function AdminPage() {
         </div>
         
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "16px" }}>
-          <KPI label="Total de Jogos" value={String(stats.totalGames)} />
-          <KPI label="Jogos Hoje" value={String(stats.todayGames)} color={stats.todayGames > 0 ? C.green : C.gray} />
-          <KPI label="Jogos Elite ⭐" value={String(stats.eliteGames)} color={C.yellow} />
-          <KPI label="Dados Pendentes" value={String(stats.pendingData)} color={stats.pendingData > 0 ? C.yellow : C.green} />
+          <SharedKPI label="Total de Jogos" value={String(stats.totalGames)} />
+          <SharedKPI label="Jogos Hoje" value={String(stats.todayGames)} color={stats.todayGames > 0 ? C.green : C.gray} />
+          <SharedKPI label="Jogos Elite ⭐" value={String(stats.eliteGames)} color={C.yellow} />
+          <SharedKPI label="Dados Pendentes" value={String(stats.pendingData)} color={stats.pendingData > 0 ? C.yellow : C.green} />
         </div>
       </div>
 
-      {/* Upload de CSV */}
+      {/* 🆕 Fluxo Único de Carregamento */}
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: "12px", padding: "24px", marginBottom: "24px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "20px" }}>
           <Upload size={20} color={C.accent} />
           <h2 style={{ fontSize: "18px", fontWeight: 600, margin: 0, color: C.text }}>
-            Importar CSV
+            📥 Carregar Dados do Dia
           </h2>
         </div>
-        
-        <div style={{ display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap", marginBottom: "16px" }}>
+
+        {/* Instrução contextual */}
+        <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: 12, marginBottom: 20, fontSize: 12, color: C.muted, lineHeight: 1.7 }}>
+          <strong style={{ color: C.text }}>Fluxo único:</strong><br/>
+          1️⃣ Selecione o CSV do PackBall (jogos NS do dia)<br/>
+          2️⃣ Clique "Processar e Salvar" — faz tudo automaticamente<br/>
+          3️⃣ Navegue pelas abas — dados já estarão carregados
+        </div>
+
+        {/* PASSO 1: Upload */}
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ display: 'block', color: C.muted, fontSize: 13, marginBottom: 8 }}>
+            Passo 1 — CSV do dia (jogos NS)
+          </label>
           <input
             type="file"
-            accept=".csv,.xlsx"
-            onChange={(e) => setFile(e.target.files?.[0] || null)}
-            style={{
-              padding: "8px 12px",
-              background: C.bg,
-              border: `1px solid ${C.border}`,
-              borderRadius: "6px",
-              color: C.text,
-              fontSize: "14px"
-            }}
+            accept=".csv"
+            onChange={e => e.target.files?.[0] && handleCsvSelect(e.target.files[0])}
+            style={{ color: C.text, fontSize: 13 }}
           />
-          
-          <button
-            onClick={handleImport}
-            disabled={!file || loading}
-            style={{
-              padding: "8px 16px",
-              background: loading ? C.gray : C.green,
-              color: "white",
-              border: "none",
-              borderRadius: "6px",
-              cursor: loading ? "not-allowed" : "pointer",
-              fontSize: "14px",
-              fontWeight: 600
-            }}
-          >
-            {loading ? "Processando..." : "🚀 Importar"}
-          </button>
+          {csvPreview && (
+            <span style={{ color: C.green, fontSize: 13, marginLeft: 12 }}>✅ {csvPreview}</span>
+          )}
         </div>
-        
+
+        {/* PASSO 2: Processar */}
+        <button
+          onClick={handleProcessar}
+          disabled={!csvFile || processing}
+          style={{
+            background: csvFile && !processing ? C.green : C.gray,
+            color: csvFile && !processing ? '#fff' : '#555',
+            border: 'none', borderRadius: 8,
+            padding: '12px 28px', fontSize: 14,
+            fontWeight: 700, cursor: csvFile ? 'pointer' : 'not-allowed',
+            width: '100%', marginBottom: 12,
+          }}
+        >
+          {processing ? '⏳ Processando...' : '🚀 Processar e Salvar'}
+        </button>
+
+        {/* PASSO 3: Confirmação */}
+        {processResult && (
+          <div style={{ background: '#0d2818', border: `1px solid ${C.green}`, borderRadius: 8, padding: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ color: C.green, fontWeight: 700, marginBottom: 4 }}>
+                ✅ Sistema atualizado!
+              </div>
+              <div style={{ color: C.muted, fontSize: 13 }}>
+                {processResult.saved} jogos salvos
+                {processResult.withOdds > 0 &&
+                  ` · ${processResult.withOdds} com odds reais`}
+              </div>
+            </div>
+            <button
+              onClick={() => router.push('/panorama')}
+              style={{ background: C.accent, color: '#000', border: 'none', borderRadius: 8, padding: '8px 16px', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}>
+              Ver Panorama →
+            </button>
+          </div>
+        )}
+
+        {/* Erros */}
         {err && (
           <div style={{
             padding: "12px",
@@ -175,66 +238,12 @@ export default function AdminPage() {
             border: `1px solid ${C.red}`,
             borderRadius: "6px",
             color: C.red,
-            fontSize: "13px"
+            fontSize: "13px",
+            marginTop: 12
           }}>
             ⚠️ {err}
           </div>
         )}
-      </div>
-
-      {/* Processamento de Dados */}
-      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: "12px", padding: "24px", marginBottom: "24px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "20px" }}>
-          <Database size={20} color={C.accent} />
-          <h2 style={{ fontSize: "18px", fontWeight: 600, margin: 0, color: C.text }}>
-            Processamento de Dados
-          </h2>
-        </div>
-        
-        {/* Fluxo diário recomendado */}
-        <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: '14px 18px', marginBottom: 16, fontSize: 13, color: C.muted, lineHeight: 1.7 }}>
-          <strong style={{ color: C.text }}>Fluxo diário recomendado:</strong><br/>
-          1. <strong>Importar CSV</strong> (acima) com os jogos do dia<br/>
-          2. <strong>Enriquecer Dados</strong> — busca placares e stats reais via API-Football<br/>
-          3. <strong>Sincronizar Dados</strong> — preenche chutes/cantos HT faltantes para resolver Finalizações
-        </div>
-
-        <div style={{ display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap" }}>
-          <button
-            title="Busca resultados reais (placares, gols) via API-Football para todos os jogos no banco que ainda não têm dados"
-            onClick={handleEnrich}
-            disabled={results.length === 0}
-            style={{
-              padding: "8px 16px",
-              background: results.length === 0 ? C.gray : C.yellow,
-              color: results.length === 0 ? C.muted : C.bg,
-              border: "none",
-              borderRadius: "6px",
-              cursor: results.length === 0 ? "not-allowed" : "pointer",
-              fontSize: "14px",
-              fontWeight: 600
-            }}
-          >
-            🎯 Enriquecer Dados
-          </button>
-          
-          <button
-            title="Busca dados de chutes e cantos do 1º tempo (HT) para jogos que possuem mercados HT mas ainda sem stats reais"
-            onClick={syncMissingResults}
-            style={{
-              padding: "8px 16px",
-              background: C.accent,
-              color: "white",
-              border: "none",
-              borderRadius: "6px",
-              cursor: "pointer",
-              fontSize: "14px",
-              fontWeight: 600
-            }}
-          >
-            🔄 Sincronizar Dados
-          </button>
-        </div>
       </div>
 
       {/* Configurações de API */}
@@ -310,7 +319,7 @@ export default function AdminPage() {
                   color: C.muted,
                   fontSize: "14px"
                 }}>
-                  {isClient && localStorage.getItem("football-api-key") ? "••••••••••••••••" : "Carregando..."}
+                  {isClient && localStorage.getItem('football-api-key') ? '••••••••••••••••' : 'Nenhuma chave configurada'}
                 </div>
                 <button
                   onClick={() => setShowApiKeyInput(true)}

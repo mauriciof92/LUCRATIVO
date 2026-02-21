@@ -3,26 +3,7 @@
 import { useMemo, useState } from 'react';
 import { useBacktest, STAKE_FIXA } from '../../hooks/useBacktest';
 import { NavHeader } from '../../components/NavHeader';
-
-const C = {
-  bg: '#0d1117', surface: '#161b22', border: '#30363d',
-  text: '#e6edf3', muted: '#8b949e', green: '#3fb950',
-  red: '#f85149', blue: '#58a6ff', gold: '#d29922',
-  elite: '#f0c040', purple: '#bc8cff',
-};
-
-const catLabel = (label: string) => {
-  const l = label.toLowerCase();
-  if (l.includes('finaliz') || l.includes('chute')) return 'Finalizações HT';
-  if (l.includes('canto') && (l.includes('ht') || l.includes('1t'))) return 'Cantos HT';
-  if (l.includes('canto')) return 'Cantos FT';
-  if (l.includes('over 2.5')) return 'Over 2.5 FT';
-  if (l.includes('over 1.5')) return 'Over 1.5 FT';
-  if (l.includes('btts') || l.includes('ambas')) return 'BTTS';
-  if (l.includes('over 0.5')) return 'Gols HT';
-  if (l.includes('vence')) return 'Fav Vence';
-  return 'Outros';
-};
+import { C, ProfileBadge, PROFILE_LABELS, EmptyState, mktCat as catLabel } from '../../components/ui';
 
 function heatColor(hitRate: number, n: number): string {
   if (n < 3) return '#1a1a2a';
@@ -156,7 +137,7 @@ export default function PatternsPage() {
       <div style={{ padding: '40px' }}>
 
         <div style={{ marginBottom: 32 }}>
-          <h1 style={{ fontSize: 28, fontWeight: 700, margin: 0 }}>🔬 Mineração de Padrões</h1>
+          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>⛏️ Minerador</h1>
           <p style={{ color: C.muted, marginTop: 6, fontSize: 14 }}>
             {confirmed.length} apostas confirmadas · Limiares ótimos e mapa de calor
           </p>
@@ -323,43 +304,84 @@ export default function PatternsPage() {
         {/* PADRÕES POR PERFIL */}
         {profileStats.length > 0 && (
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, marginBottom: 32 }}>
-            <h2 style={{ fontSize: 16, fontWeight: 600, margin: '0 0 20px' }}>🎭 Performance por Perfil de Jogo</h2>
+            <h2 style={{ fontSize: 16, fontWeight: 600, margin: '0 0 20px' }}>🎭 Performance por Perfil</h2>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-              {profileStats.map((p, i) => (
-                <div key={i} style={{
-                  background: C.bg, border: `1px solid ${p.hitRate >= 60 ? C.green : p.hitRate >= 45 ? C.gold : C.border}`,
-                  borderRadius: 10, padding: '14px 18px', minWidth: 160,
-                }}>
-                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>{p.profile}</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: p.hitRate >= 60 ? C.green : p.hitRate >= 45 ? C.gold : C.red }}>
-                    {p.hitRate.toFixed(1)}%
+              {profileStats.map((p, i) => {
+                const pLabel = PROFILE_LABELS[p.profile] ?? PROFILE_LABELS.generic;
+                return (
+                  <div key={i} style={{
+                    background: C.bg, border: `1px solid ${p.hitRate >= 60 ? C.green : p.hitRate >= 45 ? C.gold : C.border}`,
+                    borderRadius: 10, padding: '14px 18px', minWidth: 170,
+                  }}>
+                    <div style={{ marginBottom: 8 }}><ProfileBadge profile={p.profile} /></div>
+                    <div style={{ fontSize: 22, fontWeight: 700, color: p.hitRate >= 60 ? C.green : p.hitRate >= 45 ? C.gold : C.red }}>
+                      {p.hitRate.toFixed(1)}%
+                    </div>
+                    <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
+                      {p.wins}W / {p.total - p.wins}L · ROI {p.roi >= 0 ? '+' : ''}{p.roi.toFixed(1)}%
+                    </div>
                   </div>
-                  <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
-                    {p.wins}W / {p.total - p.wins}L · ROI {p.roi >= 0 ? '+' : ''}{p.roi.toFixed(1)}%
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
 
+        {/* GATILHOS POISON */}
+        {(() => {
+          const poisonStats = results.reduce((acc: Record<string, {wins:number, total:number, profit:number}>, r) => {
+            if (!r.poison?.isPoison || !r.poison.triggers) return acc;
+            const isWin = r.mainMarket.result === 'win';
+            const isConfirmed = isWin || r.mainMarket.result === 'lose';
+            if (!isConfirmed) return acc;
+            for (const t of r.poison.triggers) {
+              const tag = t.tag || 'Desconhecido';
+              if (!acc[tag]) acc[tag] = { wins: 0, total: 0, profit: 0 };
+              acc[tag].total++;
+              if (isWin) acc[tag].wins++;
+              acc[tag].profit += Number(r.mainMarket.profit || 0);
+            }
+            return acc;
+          }, {});
+          const entries = Object.entries(poisonStats).filter(([,v]) => v.total >= 2).sort((a,b) => (b[1].wins/b[1].total) - (a[1].wins/a[1].total));
+          if (entries.length === 0) return null;
+          return (
+            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, marginBottom: 32 }}>
+              <h2 style={{ fontSize: 16, fontWeight: 600, margin: '0 0 20px' }}>⚡ Gatilhos Especiais (Poison)</h2>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                {entries.map(([tag, v]) => {
+                  const hr = v.total > 0 ? (v.wins / v.total * 100) : 0;
+                  return (
+                    <div key={tag} style={{
+                      background: C.bg, border: `1px solid ${hr >= 60 ? C.green : hr >= 45 ? C.gold : C.border}`,
+                      borderRadius: 10, padding: '14px 18px', minWidth: 160,
+                    }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 6 }}>{tag}</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: hr >= 60 ? C.green : hr >= 45 ? C.gold : C.red }}>
+                        {hr.toFixed(1)}%
+                      </div>
+                      <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
+                        {v.wins}W / {v.total - v.wins}L · Lucro {v.profit >= 0 ? '+' : ''}R$ {v.profit.toFixed(2)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* ESTADO VAZIO */}
         {confirmed.length === 0 && !loading && (
-          <div style={{ textAlign: 'center', padding: '60px 0', color: C.muted }}>
-            <div style={{ fontSize: 40, marginBottom: 16 }}>🔬</div>
-            <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>
-              {results.length > 0 ? 'Nenhuma aposta confirmada para analisar' : 'Nenhum dado carregado'}
-            </div>
-            <div style={{ fontSize: 14, marginBottom: 24 }}>
-              {results.length > 0
-                ? 'Os jogos precisam ter resultado (win/lose) para a mineração funcionar.'
-                : 'Importe um CSV pelo Admin para começar.'}
-            </div>
-            <button onClick={() => { window.location.href = '/admin'; }} style={{
-              background: C.blue, color: '#000', border: 'none', borderRadius: 8,
-              padding: '10px 24px', cursor: 'pointer', fontWeight: 700, fontSize: 14,
-            }}>⚙️ Ir para Admin</button>
-          </div>
+          <EmptyState
+            icon="⛏️"
+            title={results.length > 0 ? 'Nenhuma aposta confirmada' : 'Nenhum dado carregado'}
+            subtitle={results.length > 0
+              ? 'Jogos precisam ter resultado (win/lose) para mineração funcionar.'
+              : 'Importe um CSV pelo Admin para começar.'}
+            actionLabel="⚙️ Ir para Admin"
+            actionHref="/admin"
+          />
         )}
 
       </div>

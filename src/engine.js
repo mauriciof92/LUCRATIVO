@@ -577,40 +577,10 @@ export function parseCSV(text) {
    FAVORITO
 ───────────────────────────────────────── */
 export function getFavorito(g) {
-  // DEBUG ESPECÍFICO PARA WOLVES VS ARSENAL
-  if (g.home === "Wolverhampton Wanderers" && g.away === "Arsenal") {
-    console.log(`🔍 DEBUG Wolves vs Arsenal:`);
-    console.log(`   Home: ${g.home} | AF: ${JSON.stringify(g.af)}`);
-    console.log(`   Away: ${g.away} | AF: ${JSON.stringify(g.af)}`);
-    console.log(`   Ordem original: Home vs Away`);
-    console.log(`   g.af type: ${typeof g.af}`);
-    console.log(`   g.af keys: ${g.af ? Object.keys(g.af) : 'undefined'}`);
-  }
-
-  // DEBUG ESPECÍFICO PARA QARABAĞ VS NEWCASTLE
-  if (g.home === "Qarabağ" && g.away === "Newcastle United") {
-    console.log(`🔍 DEBUG Qarabağ vs Newcastle:`);
-    console.log(`   Home: ${g.home} | AF: ${JSON.stringify(g.af)}`);
-    console.log(`   Away: ${g.away} | AF: ${JSON.stringify(g.af)}`);
-    console.log(`   Ordem original: Home vs Away`);
-    console.log(`   g.af type: ${typeof g.af}`);
-    console.log(`   g.af keys: ${g.af ? Object.keys(g.af) : 'undefined'}`);
-  }
-
-  // DEBUG ESPECÍFICO PARA OLYMPIACOS VS BAYER
-  if (g.home === "Olympiacos F.C." && g.away === "Bayer 04 Leverkusen") {
-    console.log(`🔍 DEBUG Olympiacos vs Bayer:`);
-    console.log(`   Home: ${g.home} | AF: ${JSON.stringify(g.af)}`);
-    console.log(`   Away: ${g.away} | AF: ${JSON.stringify(g.af)}`);
-    console.log(`   Ordem original: Home vs Away`);
-    console.log(`   g.af type: ${typeof g.af}`);
-    console.log(`   g.af keys: ${g.af ? Object.keys(g.af) : 'undefined'}`);
-  }
-
   const af = g?.af;
   if (!af || typeof af !== "object") {
     console.log(`❌ AF inválido: type=${typeof af}, value=${JSON.stringify(af)}`);
-    return { lado: "", nome: "", afDiff: 0, afFav: 0, afUnder: 0, chFavGol: 0, chFavHT: 0, chFavTot: 0, gol05HTFav: 0, cantFavHT: 0, cantFavFT: 0, cantFavTot: 0 };
+    return { lado: "", nome: "", nomeUnder: "", afDiff: 0, afFav: 0, afUnder: 0, chFavGol: 0, chFavTot: 0, chUnderGol: 0, chUnderTot: 0, cantFavHT: 0, cantUnderHT: 0, cantFavFT: 0, gol05HTFav: 0 };
   }
 
   const { h: afHome, a: afAway } = af;
@@ -674,7 +644,7 @@ export function computeScore(g) {
     // 5. Finalizações do favorito (peso: 13%) - foco HT [EMENDA v1.3]
     favShots: {
       weight: 0.13,
-      value: Math.min((fav?.chFavHT || 0) / 4, 1), // Range 0-4
+      value: Math.min((fav?.chFavGol || 0) / 4, 1), // Range 0-4
       description: "Pressão ofensiva HT"
     }
   };
@@ -713,8 +683,8 @@ export function computeScore(g) {
     bonuses.push("Equilíbrio otimizado");
   }
   
-  // Bônus 4: Pressão HT consistente
-  if ((fav?.chFavHT || 0) >= 2.5 && (fav?.chFavGol || 0) >= 3) { // Ajustado para 2.5 e 3
+  // Bônus 4: Pressão HT consistente (chFavTot = total chutes HT, chFavGol = no gol)
+  if ((fav?.chFavTot || 0) >= 2.5 && (fav?.chFavGol || 0) >= 3) { // Ajustado para 2.5 e 3
     finalScore += 0.03;
     bonuses.push("Pressão HT consistente");
   }
@@ -907,10 +877,6 @@ export function suggestMainMarket(g) {
     case "balanced_moderate":
       return { label: "Over 1.5 FT", axis: "gols", icon: "⚽", color: "#00e676" };
     
-    // Já tratado acima na hierarquia HT
-    case "chutes_ht_fav":
-      return { label: "Over 1.5 FT", axis: "gols", icon: "⚽", color: "#00e676" };
-
     case "low_goals":
       return { label: "Under 2.5 FT", axis: "under", icon: "🔒", color: "#ff9100" };
 
@@ -962,42 +928,11 @@ export function suggestCombo(g) {
     }
   }
 
-  // DIVERSIFICAÇÃO INTELIGENTE COM MATCHUP
-  // Verifica a pressão do favorito E se o cenário do jogo favorece cantos no HT
-  console.log(`🔍 Verificando diversificação: main.axis=${main.axis}, fav.chFavGol=${fav.chFavGol}, fav.cantFavHT=${fav.cantFavHT}`);
-  
-  // Métricas elite do favorito (baseadas no lado: Casa ou Fora)
-  const favIsHome  = fav.lado === 'Casa';
+  // Métricas elite do favorito (baseadas no lado: 🏠 Casa ou ✈️ Fora)
+  const favIsHome  = fav.lado === '🏠';
   const favAppg    = favIsHome ? (g.appgH ?? 0)       : (g.appgA ?? 0);
   const favAsPrec  = favIsHome ? (g.asPrecisaoH ?? 0) : (g.asPrecisaoA ?? 0);
   const favCant37  = favIsHome ? (g.cantos37HTH ?? 0) : (g.cantos37HTA ?? 0);
-
-  const cedeCantos = g.mediaEscanteiosSofridosHT >= 2.0 || (g.percMais4EscanteiosHT || 35) >= 40;
-  
-  // 🎯 FLEXIBILIZAÇÃO - Volume do favorito prevalece sobre fragilidade adversária
-  const exigeCedeCantos = fav.cantFavHT < 3.0;
-  const condicaoCantos = exigeCedeCantos ? cedeCantos : true;
-  
-  // 🔥 SOBERANIA DO VOLUME - Se chFavGol >= 7.0, diversificação mandatória
-  const volumeAlto = fav.chFavGol >= 7.0;
-  const condicaoFinal = volumeAlto ? true : condicaoCantos;
-  
-  // 🚀 FILTRO INVERSO DE EIXO - Permitir QUALQUER eixo, exceto perfis específicos
-  const perfisBloqueados = ['low_goals', 'under_gols'];
-  const perfilBloqueado = perfisBloqueados.includes(profile);
-  
-  // Reduzir threshold de entrada: 3.0 → 2.5
-  if (!perfilBloqueado && fav.chFavGol >= 6 && fav.cantFavHT >= 2.5 && condicaoFinal) {
-    const linhaCantos = (fav.cantFavHT >= 4.5 && (g.percMais5EscanteiosHT || 35) >= 40) ? "4.5" : "3.5";
-    cands.push({
-      label: `${fav.lado} ${fav.nome} — Over ${linhaCantos} Cantos HT (🛡️ Diversificação)`,
-      axis: "cantos_ht",
-      icon: "🚩"
-    });
-    console.log(`🛡️ Diversificação ativada: ${fav.nome} (Chutes ${fav.chFavGol} → Cantos ${linhaCantos})`);
-  } else {
-    console.log(`❌ Diversificação não ativada: condições não atendidas`);
-  }
 
   // 🚫 Campeonatos que não devem ter finalizações HT sugeridas
   const excludedLeaguesForHT = [
@@ -1083,7 +1018,7 @@ export function suggestCombo(g) {
   }
 
   // Gol HT — raise para >= 68% + confirma volume de chutes HT do favorito
-  if (fav.gol05HTFav >= 68 && fav.chFavHT >= 2.0 && !["golsHT_fav", "fav_gols"].includes(main.axis))
+  if (fav.gol05HTFav >= 68 && fav.chFavTot >= 2.0 && !["golsHT_fav", "fav_gols"].includes(main.axis))
     cands.push({ label: `${fav.lado} ${fav.nome} — Over 0.5 Gols HT (${fav.gol05HTFav.toFixed(0)}%)`, axis: "golsHT_fav", icon: "⚽" });
 
   // Over 1.5 Gols HT (Total) — exHT >= 2.5 (buffer +1) + cvGolsHT <= 50 + exG >= 2.5
@@ -1188,7 +1123,7 @@ export function computeConfidence(g) {
     // 4. Finalizações HT (peso: 15%)
     htShots: {
       weight: 0.15,
-      value: Math.min((fav?.chFavHT || 0) / 3, 1), // Normalizado, max em 3 chutes HT (mais flexível)
+      value: Math.min((fav?.chFavTot || 0) / 3, 1), // Normalizado, max em 3 chutes HT (mais flexível)
       score: 0
     },
     

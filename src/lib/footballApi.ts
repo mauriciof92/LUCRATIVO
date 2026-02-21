@@ -228,10 +228,10 @@ async function fetchHalfTimeEvents(
   });
 
   return {
-    shotsHTHome: 0,
-    shotsHTAway: 0,
-    totalShotsHTHome: 0,
-    totalShotsHTAway: 0,
+    shotsHTHome: shotsOnGoalHTHome,
+    shotsHTAway: shotsOnGoalHTAway,
+    totalShotsHTHome,
+    totalShotsHTAway,
     cornersHTHome,
     cornersHTAway,
     cornersFTHome,

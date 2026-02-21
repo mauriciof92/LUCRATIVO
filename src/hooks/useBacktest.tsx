@@ -1,67 +1,16 @@
-import { useState, useEffect } from "react";
-import { runBacktest, enrichWithRealStats, validateWithManualInput, type BetResult } from "../lib/backtest";
+import { useState, useEffect, useMemo } from "react";
+import { runBacktest, processNSGames, enrichWithRealStats, validateWithManualInput, resolveMarketResult, type BetResult } from "../lib/backtest";
 import { loadStoredBacktest, saveStoredBacktest, type StoredBacktest } from "../lib/storage";
 import { fetchRealStatsForMatches, fetchFixtureStatistics } from "../lib/footballApi";
 import { parseCSV } from "../engine";
 import { supabase } from "../lib/supabase";
+import { Badge, KPI, TH, TD, mktCat, C } from "../components/ui";
 
 // 🆕 CONSTANTE GLOBAL - STAKE FIXA R$ 25,00
 export const STAKE_FIXA = 25.00;
 
-const C = {
-  bg:"#0a0f1f", card:"#1e293b", border:"#374151", accent:"#3b82f6",
-  green:"#10b981", red:"#ef4444", yellow:"#f59e0b", gray:"#6b7280",
-  text:"#f9fafb", muted:"#9ca3af",
-};
-
-type BetStatus = "win"|"lose"|"push"|"no-odd"|"avg"|"pending_manual";
-
-function Badge({ result }: { result: BetStatus }) {
-  const map: Record<BetStatus, [string,string,string,string]> = {
-    win:     ["✅ Verde",    "#052e16", C.green, "Aposta vencedora"],
-    lose:    ["❌ Vermelho", "#450a0a", C.red, "Aposta perdida"],
-    push:    ["🟡 Push",    "#422006", C.yellow, "Empate técnico — stake devolvida"],
-    "no-odd":["— Void",    "#1f2937", C.gray, "Sem odd disponível no CSV"],
-    avg:     ["📊 Média",   "#1e1b4b", "#818cf8", "Sem dados reais HT — resultado baseado em média histórica, não conta como win nem lose"],
-    "pending_manual": ["⚠️ Pendente", "#451a03", "#f59e0b", "Aguardando dados reais para resolver"],
-  };
-  const [label, bg, color, tooltip] = map[result] ?? map["no-odd"];
-  return <span title={tooltip} style={{background:bg,color,border:`1px solid ${color}40`,borderRadius:4,padding:"2px 7px",fontSize:11,fontWeight:600,whiteSpace:"nowrap",cursor:"help"}}>{label}</span>;
-}
-
-function KPI({ label, value, color }: { label:string; value:string; color?:string }) {
-  return (
-    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"14px 18px",flex:"1 1 110px",minWidth:110}}>
-      <div style={{fontSize:11,color:C.muted,marginBottom:4}}>{label}</div>
-      <div style={{fontSize:22,fontWeight:700,color:color??C.text}}>{value}</div>
-    </div>
-  );
-}
-
-function TH({ children }: { children: React.ReactNode }) {
-  return (
-    <th style={{ padding: "8px 10px", textAlign: "left", color: C.muted, fontWeight: 600, whiteSpace: "nowrap", borderBottom: `1px solid ${C.border}` }}>
-      {children}
-    </th>
-  );
-}
-
-function TD({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
-  return (
-    <td style={{ padding: "8px 10px", verticalAlign: "top", ...style }}>
-      {children}
-    </td>
-  );
-}
-
-// Função auxiliar para categorizar mercados
-const mktCat = (label: string) => {
-  const l = label.toLowerCase();
-  if (l.includes("finalizac") || l.includes("chute")) return "Finalizações HT";
-  if (l.includes("canto") || l.includes("escanteio")) return "Cantos HT";
-  if (l.includes("gol") || l.includes("goal")) return "Gols HT";
-  return "Outros";
-};
+// Re-export UI components for backward compatibility
+export { Badge, KPI, TH, TD, mktCat } from "../components/ui";
 
 // Função auxiliar para estatísticas dos mercados
 const buildMarketStats = (results: BetResult[]) => {
@@ -95,136 +44,124 @@ export const useBacktest = () => {
   const [enrichErr, setEnrichErr] = useState<string>("");
   const [manualInputs, setManualInputs] = useState<Record<string, string>>({});
 
+  // 🆕 CSV text original preservado para Múltiplas
+  const [lastCsvText, setLastCsvText] = useState<string>("");
+
   // 🆕 FASE 5.3: Estado global para sincronização
   const [isGlobalSyncing, setIsGlobalSyncing] = useState(false);
 
-  // 🆕 FASE 5.3: Hydration automática ao carregar qualquer página
+  // Hydration: localStorage (instantâneo) → Supabase (fallback remoto)
   useEffect(() => {
     async function hydrate() {
+      if (typeof window === 'undefined') return;
       setLoading(true);
       try {
-        console.log('[HYDRATION] Iniciando busca de dados...');
-        
-        // 🆕 Buscar direto do Supabase (única fonte da verdade)
+        // ── PRIORIDADE 1: Cache local completo (salvo pelo import) ──
+        const cached = localStorage.getItem('lucrativo-processed-games');
+        if (cached) {
+          try {
+            const parsed = JSON.parse(cached);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              // Recalcular resultados de jogos FT com result pendente
+              const resolved = parsed.map((r: any) => {
+                const isFT = r.status === 'FT';
+                const mr = r.mainMarket;
+                if (isFT && mr && (mr.result === 'no-odd' || mr.result === 'pending_manual') && mr.label) {
+                  const result = resolveMarketResult(mr.label, r);
+                  const profit = result === 'win' ? (mr.odd ?? 0) * STAKE_FIXA - STAKE_FIXA
+                               : result === 'lose' ? -STAKE_FIXA : 0;
+                  return { ...r, mainMarket: { ...mr, result, profit } };
+                }
+                return r;
+              });
+              console.log(`[HYDRATION] Cache local: ${resolved.length} jogos`);
+              setResults(resolved);
+              setShowTable(true);
+              const savedCsv = localStorage.getItem('lucrativo-last-csv');
+              if (savedCsv) setLastCsvText(savedCsv);
+              return;
+            }
+          } catch { /* cache corrompido, continuar */ }
+        }
+
+        // ── PRIORIDADE 2: Supabase (fallback remoto) ──
+        console.log('[HYDRATION] Sem cache local, buscando Supabase...');
         const { data: betData, error } = await supabase
           .from('bet_results')
-          .select(`
-            *,
-            combo_legs (*)
-          `)
+          .select('*')
           .order('created_at', { ascending: false })
           .limit(500);
 
-        if (error) {
-          console.error('[HYDRATION] Erro Supabase:', error);
-          throw error;
+        if (error) throw error;
+        if (!betData || betData.length === 0) {
+          console.log('[HYDRATION] Nenhum dado encontrado');
+          return;
         }
 
-        console.log(`[HYDRATION] Supabase retornou ${betData?.length || 0} registros`);
+        const mapped: BetResult[] = betData.map(row => {
+          let favorito: any = { lado: '', nome: '', nomeUnder: '', afFav: 0, afUnder: 0, afDiff: 0, chFavGol: 0, chFavTot: 0, chUnderGol: 0, chUnderTot: 0, cantFavHT: 0, cantUnderHT: 0, cantFavFT: 0, gol05HTFav: 0 };
+          try { const f = row.favorito_data ? JSON.parse(row.favorito_data) : null; if (f?.nome) favorito = f; } catch {}
 
-        if (betData && betData.length > 0) {
-          // Mapear colunas do Supabase para o formato BetResult do app
-          const mapped: BetResult[] = betData.map(row => ({
-            id: row.id,
-            match: row.match,
-            league: row.league ?? '',
-            hour: row.hour ?? '',
-            status: row.status ?? '',
-            resultHome: row.result_home ?? 0,
-            resultAway: row.result_away ?? 0,
-            profile: row.profile ?? '',
-            score: Number(row.score ?? 0),
-            confidence: Number(row.confidence ?? 0),
-            actualTotalShotsHT: row.actual_shots_ht ?? undefined,
-            actualTotalCornersHT: row.actual_corners_ht ?? undefined,
-            created_at: row.created_at ?? '',
-            favorito: { lado: '', nome: '', nomeUnder: '', afFav: 0, afUnder: 0, afDiff: 0, chFavGol: 0, chFavTot: 0, chUnderGol: 0, chUnderTot: 0, cantFavHT: 0, cantUnderHT: 0, cantFavFT: 0, cantUnderFT: 0, gol05HTFav: 0, dfH: 0, dfA: 0 },
-            mainMarket: {
-              label: row.main_market_label ?? '',
-              odd: Number(row.main_market_odd ?? 0),
-              minOdd: 0,
-              stake: STAKE_FIXA,
-              result: row.main_market_result ?? 'no-odd',
-              profit: Number(row.main_market_profit ?? 0),
-              hasValue: false,
-            },
-            combo: (row.combo_legs ?? []).map((cl: any) => ({
-              label: cl.label ?? '',
-              odd: Number(cl.odd ?? 0),
-              minOdd: 0,
-              stake: STAKE_FIXA,
-              result: cl.result ?? 'no-odd',
-              profit: Number(cl.profit ?? 0),
-              hasValue: false,
-            })),
-            ftGoals: (row.result_home ?? 0) + (row.result_away ?? 0),
-          }));
+          let combo: any[] = [];
+          try { const c = row.combo_data ? JSON.parse(row.combo_data) : null; if (Array.isArray(c)) combo = c; } catch {}
 
-          console.log(`[HYDRATION] Mapeados ${mapped.length} jogos`);
+          let poison;
+          try { poison = row.poison_data ? JSON.parse(row.poison_data) : undefined; } catch {}
 
-          setResults(mapped);
-          setHistory({ version: "1.0.0", createdAt: new Date().toISOString(), results: mapped, summary: summary });
-
-          // Recalcular summary
-          const wins = mapped.filter(r => r.mainMarket.result === 'win').length;
-          const losses = mapped.filter(r => r.mainMarket.result === 'lose').length;
-          const total = wins + losses;
-          const totalProfit = mapped.reduce(
-            (acc, r) => acc + Number(r.mainMarket.profit || 0), 0
-          );
-
-          const newSummary = {
-            totalGames: mapped.length,
-            totalBets: total,
-            wins,
-            losses,
-            hitRate: total > 0 ? (wins / total * 100) : 0,
-            roi: total > 0 ? (totalProfit / (total * STAKE_FIXA) * 100) : 0,
-            totalProfit,
-          };
-          
-          setSummary(newSummary);
-          setShowTable(true);
-
-          // 🆕 Salvar no cache local para performance
-          if (typeof window !== 'undefined') {
-            localStorage.setItem('lucrativo-backtest-data', JSON.stringify({
-              version: "1.0.0",
-              createdAt: new Date().toISOString(),
-              results: mapped,
-              summary: newSummary
-            }));
+          // Recalcular resultado para jogos FT que ainda estão como 'no-odd'
+          const isFT = (row.status ?? '') === 'FT';
+          const storedResult = row.main_market_result ?? 'no-odd';
+          const label = row.main_market_label ?? '';
+          const rHome = row.result_home ?? 0;
+          const rAway = row.result_away ?? 0;
+          let mainResult = storedResult;
+          let mainProfit = Number(row.main_market_profit ?? 0);
+          if (isFT && (storedResult === 'no-odd' || storedResult === 'pending_manual') && label) {
+            mainResult = resolveMarketResult(label, { resultHome: rHome, resultAway: rAway });
+            const odd = Number(row.main_market_odd ?? 0);
+            mainProfit = mainResult === 'win' ? odd * STAKE_FIXA - STAKE_FIXA
+                       : mainResult === 'lose' ? -STAKE_FIXA : 0;
           }
 
-          console.log(`[HYDRATION] ✅ Sucesso: ${mapped.length} jogos carregados`);
-        } else {
-          console.log('[HYDRATION] ❌ Nenhum dado encontrado no Supabase');
-          
-          // 🆕 Tentar cache local se Supabase estiver vazio
-          if (typeof window !== 'undefined') {
-            const cached = localStorage.getItem('lucrativo-backtest-data');
-            if (cached) {
-              const parsed = JSON.parse(cached);
-              if (parsed.results?.length) {
-                setResults(parsed.results);
-                setSummary(parsed.summary);
-                setHistory(parsed);
-                setShowTable(true);
-                console.log(`[HYDRATION] Cache local: ${parsed.results.length} jogos`);
-              }
+          // Recalcular combo results também
+          const resolvedCombo = combo.map((c: any) => {
+            if (isFT && (c.result === 'no-odd' || c.result === 'pending_manual') && c.label) {
+              const cResult = resolveMarketResult(c.label, { resultHome: rHome, resultAway: rAway });
+              const cOdd = Number(c.odd ?? 0);
+              const cProfit = cResult === 'win' ? cOdd * STAKE_FIXA - STAKE_FIXA
+                            : cResult === 'lose' ? -STAKE_FIXA : 0;
+              return { ...c, result: cResult, profit: cProfit };
             }
-          }
-        }
+            return c;
+          });
+
+          return {
+            id: row.id, match: row.match, league: row.league ?? '', hour: row.hour ?? '',
+            status: row.status ?? '', resultHome: rHome, resultAway: rAway,
+            profile: row.profile ?? '', score: Number(row.score ?? 0), confidence: Number(row.confidence ?? 0),
+            created_at: row.created_at ?? '', favorito, poison,
+            mainMarket: {
+              label, odd: Number(row.main_market_odd ?? 0),
+              minOdd: 0, stake: STAKE_FIXA, result: mainResult as any,
+              profit: mainProfit, hasValue: false,
+            },
+            combo: resolvedCombo, ftGoals: rHome + rAway,
+          };
+        });
+
+        console.log(`[HYDRATION] Supabase: ${mapped.length} jogos`);
+        setResults(mapped);
+        setShowTable(true);
+        // Salvar no cache local para próxima vez ser instantâneo
+        localStorage.setItem('lucrativo-processed-games', JSON.stringify(mapped));
       } catch (e) {
-        console.error('[HYDRATION] Erro geral:', e);
-        // Fallback silencioso — dados do cache já foram carregados acima
+        console.error('[HYDRATION] Erro:', e);
       } finally {
         setLoading(false);
       }
     }
-
     hydrate();
-  }, []); // Roda APENAS uma vez ao montar
+  }, []);
 
   // Recalcular ROI quando results muda — fórmula unificada (igual Dashboard/Panorama)
   useEffect(() => {
@@ -266,25 +203,28 @@ export const useBacktest = () => {
   }, [manualInputs]);
 
   // Funções
-  const handleImport = async () => {
-    if (!file) return;
+  const handleImport = async (fileOverride?: File) => {
+    const f = fileOverride ?? file;
+    if (!f) return;
     setLoading(true);
     setErr("");
     try {
-      const text = await file.text();
-      // Usar runBacktest para resolver win/lose corretamente
-      const { results: backtestResults } = runBacktest(text);
-      // Adicionar stake fixa a todos os resultados
-      const results: BetResult[] = backtestResults.map(r => ({
+      const text = await f.text();
+      setLastCsvText(text); // Preservar CSV original para Múltiplas
+      if (typeof window !== 'undefined') localStorage.setItem('lucrativo-last-csv', text);
+      // Usar processNSGames para processar TODOS os jogos (NS + FT)
+      const allResults = processNSGames(text);
+      // Adicionar stake fixa
+      const results: BetResult[] = allResults.map(r => ({
         ...r,
-        mainMarket: { ...r.mainMarket, stake: STAKE_FIXA, profit: r.mainMarket.result === 'win' ? (r.mainMarket.odd ?? 0) * STAKE_FIXA - STAKE_FIXA : r.mainMarket.result === 'lose' ? -STAKE_FIXA : 0 },
-        combo: r.combo.map(c => ({ ...c, stake: STAKE_FIXA, profit: c.result === 'win' ? (c.odd ?? 0) * STAKE_FIXA - STAKE_FIXA : c.result === 'lose' ? -STAKE_FIXA : 0 })),
+        mainMarket: { ...r.mainMarket, stake: STAKE_FIXA },
+        combo: r.combo.map(c => ({ ...c, stake: STAKE_FIXA })),
       }));
       setResults(results);
       setShowTable(true);
-      console.log(`[CSV-IMPORT] ${results.length} jogos importados com resultados resolvidos`);
+      console.log(`[CSV-IMPORT] ${results.length} jogos importados (NS+FT) com engine completo`);
 
-      // Salvar no Supabase com resultados corretos
+      // Salvar no Supabase com dados completos (incluindo favorito e combo)
       const upsertRows = results.map(r => ({
         id: r.id,
         match: r.match,
@@ -300,10 +240,18 @@ export const useBacktest = () => {
         main_market_odd: r.mainMarket.odd,
         main_market_result: r.mainMarket.result,
         main_market_profit: r.mainMarket.profit,
+        favorito_data: JSON.stringify(r.favorito ?? {}),
+        combo_data: JSON.stringify(r.combo ?? []),
+        poison_data: JSON.stringify(r.poison ?? {}),
       }));
       const { error: upsertErr } = await supabase.from('bet_results').upsert(upsertRows, { onConflict: 'id' });
       if (upsertErr) console.warn('[CSV-IMPORT] Supabase upsert warning:', upsertErr.message);
       else console.log(`[CSV-IMPORT] ${upsertRows.length} jogos salvos no Supabase`);
+
+      // Salvar no cache local como backup
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('lucrativo-processed-games', JSON.stringify(results));
+      }
     } catch (e: any) {
       setErr("Erro ao importar CSV: " + (e?.message ?? String(e)));
     } finally {
@@ -322,7 +270,11 @@ export const useBacktest = () => {
     setEnrichErr("");
     setManualInputs({});
     localStorage.removeItem('backtest-manual-inputs');
-    console.log('[CLEAR] Estado limpo');
+    localStorage.removeItem('lucrativo-processed-games');
+    localStorage.removeItem('lucrativo-backtest-data');
+    localStorage.removeItem('lucrativo-last-csv');
+    setLastCsvText('');
+    console.log('[CLEAR] Estado limpo (todos os caches)');
   };
 
   const handleEnrich = async () => {
@@ -365,6 +317,38 @@ export const useBacktest = () => {
       setEnriching(false);
     }
   };
+
+  // 🆕 Wrapper para importFromCSV (compatibilidade com Admin)
+  const importFromCSV = async (csvFile: File) => {
+    setFile(csvFile);
+    await handleImport(csvFile);
+  };
+
+  // 🆕 Wrapper para enrichWithOdds (compatibilidade com Admin)
+  const enrichWithOdds = async (apiKey: string) => {
+    // Salvar API key se necessário
+    if (apiKey) {
+      localStorage.setItem('football-api-key', apiKey);
+    }
+    await handleEnrich();
+    return reqUsed; // retorna número de odds enriquecidas
+  };
+
+  // 🆕 Jogos do dia (para Panorama)
+  const todayGames = useMemo(() => {
+    const now = new Date();
+    const todayISO = now.toISOString().split('T')[0]; // "2026-02-21"
+    const todayDDMM = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}`; // "21/02"
+    return results.filter(r => {
+      const h = (r.hour ?? '').trim();
+      // Suporta formatos: "2026-02-21 15:00", "21/02 15:00", "21/02/2026 15:00"
+      if (h.startsWith(todayISO)) return true;
+      if (h.startsWith(todayDDMM)) return true;
+      // Fallback: se não tem data no hour, considerar como hoje (jogos recem importados)
+      if (!h.includes('/') && !h.includes('-') && h.includes(':')) return true;
+      return false;
+    });
+  }, [results]);
 
   // 🆕 FASE 5.3: Scanner automático de jogos do dia
   const fetchTodayGames = async () => {
@@ -622,6 +606,16 @@ export const useBacktest = () => {
     handleManualConfirm,
     syncMissingResults,
     fetchTodayGames,
+    
+    // 🆕 Wrappers para Admin
+    importFromCSV,
+    enrichWithOdds,
+    
+    // 🆕 Jogos do dia
+    todayGames,
+    
+    // 🆕 CSV text original para Múltiplas
+    lastCsvText,
     
     // Cálculos derivados
     mktStats,
