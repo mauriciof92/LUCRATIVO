@@ -23,13 +23,19 @@ const ABBREVIATIONS: Record<string, string> = {
   'newcastle': 'newcastle united',
   'west ham': 'west ham united',
   'brighton': 'brighton hove albion',
+  
+  // ── NOVOS — casos identificados em produção ──
   'sporting braga': 'sc braga',
   'braga': 'sc braga',
   'vitoria guimaraes': 'vitoria sc',
+  'vitória guimarães': 'vitoria sc',
   'vitoria sc': 'vitoria sc',
   'queens park rangers': 'qpr',
+  'qpr': 'queens park rangers',  // bidirecional
   'hearts': 'heart of midlothian',
+  'heart of midlothian': 'hearts',
   'internacional de bogota': 'internacional bogota',
+  'internacional de bogotá': 'internacional bogota',
 };
 
 export function normalizeTeamName(raw: string): string {
