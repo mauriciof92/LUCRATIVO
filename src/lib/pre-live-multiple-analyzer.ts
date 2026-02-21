@@ -141,6 +141,22 @@ export class PreLiveMultipleAnalyzer {
     return null;
   }
 
+  // Infere o eixo (axis) de um mercado a partir do label (suggestCombo não retorna axis)
+  private inferAxis(label: string): string {
+    const l = label.toLowerCase();
+    if ((l.includes('finaliz') || l.includes('chute')) && l.includes('ht')) return 'chutes_ht';
+    if ((l.includes('canto') || l.includes('escanteio')) && l.includes('ht')) return 'cantos_ht';
+    if (l.includes('canto') || l.includes('escanteio')) return 'cantos';
+    if (l.includes('ambas marcam') || l.includes('btts')) return 'btts';
+    if (l.includes('under')) return 'under';
+    if (l.includes('vence') && (l.includes('over') || l.includes('+'))) return 'fav_gols';
+    if (l.includes('vence')) return 'fav';
+    if (l.includes('blitz')) return 'chutes_ht';
+    if ((l.includes('gol') || l.includes('over 0.5') || l.includes('over 1.5')) && l.includes('ht')) return 'golsHT';
+    if (l.includes('over')) return 'gols';
+    return 'other';
+  }
+
   // Pontua especificidade de um mercado: HT por time > HT total > FT específico > FT genérico
   private marketSpecificity(label: string): number {
     const l = label.toLowerCase();
@@ -205,14 +221,23 @@ export class PreLiveMultipleAnalyzer {
   }
 
   // 🎯 Extrai MÚLTIPLOS mercados complementares de eixos diferentes para um jogo (Bet Builder)
-  private getGameMarkets(game: any, usedSigs: Set<string>, maxMarkets: number): any[] {
+  // ticketAxes: eixos já usados por outros jogos no bilhete — penaliza repetição
+  private getGameMarkets(game: any, usedSigs: Set<string>, maxMarkets: number, ticketAxes?: Set<string>): any[] {
     const combo = suggestCombo(game) || [];
     const main = suggestMainMarket(game);
     const allCandidates: any[] = [...combo];
     if (main?.label) allCandidates.push(main);
 
-    // Ordenar por especificidade
-    allCandidates.sort((a: any, b: any) => this.marketSpecificity(b.label) - this.marketSpecificity(a.label));
+    // Ordenar por especificidade, mas penalizar eixos já presentes no bilhete (-50)
+    allCandidates.sort((a: any, b: any) => {
+      let sa = this.marketSpecificity(a.label);
+      let sb = this.marketSpecificity(b.label);
+      if (ticketAxes) {
+        if (ticketAxes.has(this.inferAxis(a.label))) sa -= 50;
+        if (ticketAxes.has(this.inferAxis(b.label))) sb -= 50;
+      }
+      return sb - sa;
+    });
 
     const selected: any[] = [];
     const usedAxes = new Set<string>(); // Não repetir mesmo eixo no mesmo jogo
@@ -222,9 +247,9 @@ export class PreLiveMultipleAnalyzer {
       if (!opt?.label) continue;
       if (!this.isLabelAllowed(opt.label, game.league || '')) continue;
 
-      // Não repetir mesmo eixo no mesmo jogo (ex: 2 linhas de chutes_ht)
-      const axis = (opt as any).axis || '';
-      if (axis && usedAxes.has(axis)) continue;
+      // Não repetir mesmo eixo no mesmo jogo (ex: 2 linhas de cantos)
+      const axis = this.inferAxis(opt.label);
+      if (usedAxes.has(axis)) continue;
 
       const bestOdd = this.getBestOdd(game, opt.label);
       if (!this.isOddInRange(bestOdd)) continue;
@@ -232,9 +257,9 @@ export class PreLiveMultipleAnalyzer {
       const sig = `${game.home}_${opt.label}`;
       if (usedSigs.has(sig)) continue;
 
-      selected.push({ ...opt, _resolvedOdd: bestOdd });
+      selected.push({ ...opt, _resolvedOdd: bestOdd, _axis: axis });
       usedSigs.add(sig);
-      if (axis) usedAxes.add(axis);
+      usedAxes.add(axis);
     }
 
     return selected;
@@ -378,13 +403,15 @@ export class PreLiveMultipleAnalyzer {
       const allSelections: any[] = [];
       let gamesUsed = 0;
 
+      const ticketAxes = new Set<string>(); // Eixos já usados neste bilhete
+
       for (const g of topGames) {
         if (gamesUsed >= tier.nGames) break;
 
-        // Extrai 2-3 mercados complementares deste jogo
-        const markets = this.getGameMarkets(g, globalUsedSigs, tier.marketsPerGame);
-        if (markets.length < 2) {
-          console.log(`[SGP-${typeId}] ${g.match}: apenas ${markets.length} mercado(s) — precisa 2+`);
+        // Extrai 2-3 mercados complementares deste jogo, penalizando eixos já no bilhete
+        const markets = this.getGameMarkets(g, globalUsedSigs, tier.marketsPerGame, ticketAxes);
+        if (markets.length === 0) {
+          console.log(`[SGP-${typeId}] ${g.match}: 0 mercados — pulando`);
           continue;
         }
 
@@ -396,7 +423,10 @@ export class PreLiveMultipleAnalyzer {
         }
 
         console.log(`[SGP-${typeId}] ✅ ${g.match}: ${markets.length} mercados, gameOdd ${gameOdd.toFixed(2)}`);
-        markets.forEach((m: any) => console.log(`   → ${m.label} @ ${m._resolvedOdd?.toFixed(2)}`));
+        markets.forEach((m: any) => {
+          console.log(`   → [${m._axis}] ${m.label} @ ${m._resolvedOdd?.toFixed(2)}`);
+          ticketAxes.add(m._axis); // Registrar eixo para diversidade cross-jogo
+        });
         allSelections.push(...buildSelections(g, markets, reason));
         gamesUsed++;
       }

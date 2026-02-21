@@ -166,8 +166,10 @@ export function processNSGames(csvText: string): BetResult[] {
     const fav = getFavorito(g);
     const poison = detectPoisonTriggers(g);
 
-    const mainOdd = getOddForLabel(g, main.label);
+    const mainOddRaw = getOddForLabel(g, main.label);
     const mainMinOdd = getMinOddForLabel(main.label);
+    // Fallback: usar odd estimada quando CSV não tem (Finalizações HT, Cantos HT)
+    const mainOdd = (typeof mainOddRaw === 'number' && mainOddRaw > 1) ? mainOddRaw : mainMinOdd;
     const valueAnalysis = calculateValueBet(g, main.label, mainOdd);
     const isFT = g.status === 'FT';
 
@@ -178,8 +180,10 @@ export function processNSGames(csvText: string): BetResult[] {
                      : mainResult === "lose" ? -stake : 0;
 
     const comboResults = combo.map(item => {
-      const odd = getOddForLabel(g, item.label);
+      const oddRaw = getOddForLabel(g, item.label);
       const minOdd = getMinOddForLabel(item.label);
+      // Fallback: usar odd estimada quando CSV não tem
+      const odd = (typeof oddRaw === 'number' && oddRaw > 1) ? oddRaw : minOdd;
       const val = calculateValueBet(g, item.label, odd);
       const result = isFT ? resolveMarketResult(item.label, g) : "no-odd";
       const profit = result === "win" ? (odd ?? 0) * stake - stake
