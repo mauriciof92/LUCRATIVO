@@ -103,7 +103,7 @@ export class PreLiveMultipleAnalyzer {
     console.log(`[ODDS-INJECT] ${Object.keys(this.realOddsMap).length} jogos com odds reais injetadas`);
   }
 
-  /** Busca a melhor odd disponível para um mercado: real API > CSV > null */
+  /** Busca a melhor odd disponível: real API > CSV > odd estimada (minOdd do engine) */
   private getBestOdd(game: any, marketLabel: string): number | null {
     const matchKey = game?.match || `${game?.home || ''} x ${game?.away || ''}`;
     
@@ -117,10 +117,8 @@ export class PreLiveMultipleAnalyzer {
       const nl = marketLabel.toLowerCase();
       for (const [key, odd] of Object.entries(realMarkets)) {
         const nk = key.toLowerCase();
-        // Match Over X.5 lines
         const lineMatch = nl.match(/over\s+(\d+\.\d+)/);
         if (lineMatch && nk.includes(`over ${lineMatch[1]}`)) {
-          // Verificar se é o mesmo tipo de mercado
           if (nl.includes('finaliz') && nk.includes('finaliz')) return odd;
           if (nl.includes('canto') && nk.includes('canto')) return odd;
           if (nl.includes('gol') && nk.includes('gol')) return odd;
@@ -133,7 +131,14 @@ export class PreLiveMultipleAnalyzer {
     
     // 2. Fallback: odd do CSV
     const csvOdd = getOddForLabel(game, marketLabel);
-    return (typeof csvOdd === 'number' && !isNaN(csvOdd) && csvOdd > 1) ? csvOdd : null;
+    if (typeof csvOdd === 'number' && !isNaN(csvOdd) && csvOdd > 1) return csvOdd;
+
+    // 3. Fallback final: odd estimada conservadora do engine (para Finalizações HT, Cantos HT, etc.)
+    // O CSV não tem odds para esses mercados específicos, mas o engine tem estimativas seguras
+    const estimatedOdd = getMinOddForLabel(marketLabel);
+    if (typeof estimatedOdd === 'number' && estimatedOdd > 1) return estimatedOdd;
+
+    return null;
   }
 
   // Pontua especificidade de um mercado: HT por time > HT total > FT específico > FT genérico
