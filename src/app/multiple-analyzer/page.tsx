@@ -66,13 +66,7 @@ export default function MultipleAnalyzerPage() {
     setLoadingOdds(true);
     setError('');
     try {
-      const apiKey = localStorage.getItem('football-api-key') ?? '';
-      if (!apiKey) {
-        setError('API Football key não configurada. Configure em Admin > Configurações de API.');
-        return;
-      }
-      
-      // Chamar API route server-side (evita CORS)
+      // API key é lida server-side pelo route handler (process.env.FOOTBALL_API_KEY)
       const today = new Date().toISOString().split('T')[0];
       const res = await fetch('/api/football-odds', {
         method: 'POST',
