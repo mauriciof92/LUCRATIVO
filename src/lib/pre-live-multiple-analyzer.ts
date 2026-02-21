@@ -4,15 +4,15 @@ import type { PreMatchOdds } from "./footballApi";
 // ── CONSTANTES DE QUALIDADE ──────────────────────────────────────────────────
 const MIN_MARKET_ODD = 1.10;  // Odd mínima por mercado individual (SGP)
 const MAX_MARKET_ODD = 2.50;  // Odd máxima por mercado individual
-const MIN_GAME_ODD = 1.30;    // Odd mínima por jogo (produto dos mercados do jogo)
-const MAX_GAME_ODD = 3.00;    // Odd máxima por jogo
+const MIN_GAME_ODD = 1.20;    // Odd mínima por jogo (produto dos mercados do jogo)
+const MAX_GAME_ODD = 5.00;    // Odd máxima por jogo (ex: 1.70 × 1.85 × 1.35 = 4.25)
 // Tiers baseados em número de JOGOS (cada jogo = 2-3 mercados Bet Builder)
 const TIER_CONFIG: Record<string, { nGames: number; marketsPerGame: number; stake: number; minTotal: number; maxTotal: number }> = {
-  bronze:    { nGames: 2, marketsPerGame: 2, stake: 50, minTotal: 2.0,  maxTotal: 6.0  },
-  silver:    { nGames: 3, marketsPerGame: 2, stake: 35, minTotal: 3.0,  maxTotal: 10.0 },
-  gold:      { nGames: 3, marketsPerGame: 3, stake: 25, minTotal: 4.0,  maxTotal: 15.0 },
-  agressivo: { nGames: 4, marketsPerGame: 2, stake: 15, minTotal: 5.0,  maxTotal: 25.0 },
-  bingo:     { nGames: 5, marketsPerGame: 2, stake: 10, minTotal: 6.0,  maxTotal: 40.0 },
+  bronze:    { nGames: 2, marketsPerGame: 2, stake: 50, minTotal: 1.5,  maxTotal: 15.0  },
+  silver:    { nGames: 3, marketsPerGame: 2, stake: 35, minTotal: 2.0,  maxTotal: 30.0 },
+  gold:      { nGames: 3, marketsPerGame: 3, stake: 25, minTotal: 3.0,  maxTotal: 60.0 },
+  agressivo: { nGames: 4, marketsPerGame: 2, stake: 15, minTotal: 4.0,  maxTotal: 80.0 },
+  bingo:     { nGames: 5, marketsPerGame: 2, stake: 10, minTotal: 5.0,  maxTotal: 150.0 },
 };
 // Qualidade mínima por jogo (gate de entrada)
 const MIN_SCORE = 0.65;  // Score ≥ 65%
@@ -383,16 +383,25 @@ export class PreLiveMultipleAnalyzer {
 
         // Extrai 2-3 mercados complementares deste jogo
         const markets = this.getGameMarkets(g, globalUsedSigs, tier.marketsPerGame);
-        if (markets.length < 2) continue; // Mínimo 2 mercados por jogo para valer como SGP
+        if (markets.length < 2) {
+          console.log(`[SGP-${typeId}] ${g.match}: apenas ${markets.length} mercado(s) — precisa 2+`);
+          continue;
+        }
 
         // Odd combinada deste jogo
         const gameOdd = markets.reduce((acc: number, m: any) => acc * (m._resolvedOdd || 1), 1);
-        if (gameOdd < MIN_GAME_ODD || gameOdd > MAX_GAME_ODD) continue;
+        if (gameOdd < MIN_GAME_ODD || gameOdd > MAX_GAME_ODD) {
+          console.log(`[SGP-${typeId}] ${g.match}: gameOdd ${gameOdd.toFixed(2)} fora do range ${MIN_GAME_ODD}-${MAX_GAME_ODD}`);
+          continue;
+        }
 
+        console.log(`[SGP-${typeId}] ✅ ${g.match}: ${markets.length} mercados, gameOdd ${gameOdd.toFixed(2)}`);
+        markets.forEach((m: any) => console.log(`   → ${m.label} @ ${m._resolvedOdd?.toFixed(2)}`));
         allSelections.push(...buildSelections(g, markets, reason));
         gamesUsed++;
       }
 
+      console.log(`[SGP-${typeId}] ${gamesUsed}/${tier.nGames} jogos usados`);
       if (gamesUsed < Math.min(tier.nGames, 2)) return null;
 
       // Todas devem ter odd
