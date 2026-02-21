@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchOddsForDate, fetchPreMatchOdds } from "../../../lib/footballApi";
+import { fetchOddsForDate, fetchPreMatchOdds, fetchOddsForCsvGames } from "../../../lib/footballApi";
+import { parseCSV } from "../../../engine";
 
 export async function GET(req: NextRequest) {
   const apiKey = process.env.FOOTBALL_API_KEY;
@@ -41,6 +42,35 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ oddsMap, fixtureMap, reqUsed });
   } catch (e: any) {
     console.error("[football-odds] error:", e);
+    return NextResponse.json({ error: e?.message ?? String(e) }, { status: 500 });
+  }
+}
+
+export async function POST(req: NextRequest) {
+  const apiKey = process.env.FOOTBALL_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json({ error: "FOOTBALL_API_KEY not configured" }, { status: 500 });
+  }
+
+  try {
+    const body = await req.json();
+    const { csvText, date } = body;
+    
+    if (!csvText || !date) {
+      return NextResponse.json({ error: "csvText and date required" }, { status: 400 });
+    }
+
+    // Parse CSV to get games
+    const { games } = parseCSV(csvText);
+    
+    // Use optimized fetching
+    const result = await fetchOddsForCsvGames(games, apiKey, date);
+    
+    console.log(`[football-odds] POST: Optimized odds for ${games.length} CSV games → ${result.matched.length} matched, ${result.reqUsed} requests`);
+    
+    return NextResponse.json(result);
+  } catch (e: any) {
+    console.error("[football-odds] POST error:", e);
     return NextResponse.json({ error: e?.message ?? String(e) }, { status: 500 });
   }
 }

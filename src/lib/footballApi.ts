@@ -1,5 +1,7 @@
 const BASE_URL = "https://v3.football.api-sports.io";
 
+import { fetchOddsForCsvMatches, type CsvMatch } from "./fixture-matcher";
+
 export interface RealStats {
   matchKey: string;
   homeTeam: string;
@@ -553,4 +555,76 @@ export async function fetchOddsForDate(
 
   console.log(`[fetchOddsForDate] ${date}: ${fixtures.length} fixtures, ${Object.keys(oddsMap).length} with odds, ${reqUsed} API calls`);
   return { oddsMap, fixtureMap, reqUsed };
+}
+
+/** 🆕 Optimized: Fetch odds only for CSV games (21 requests vs 1461) */
+export async function fetchOddsForCsvGames(
+  csvGames: any[], // games from parseCSV
+  apiKey: string,
+  date: string
+): Promise<{ oddsMap: Record<number, PreMatchOdds>; fixtureMap: Record<string, number>; reqUsed: number; matched: any[]; unmatched: any[] }> {
+  // Convert CSV games to CsvMatch format
+  const csvMatches: CsvMatch[] = csvGames.map(g => ({
+    home: g.home || '',
+    away: g.away || '',
+    hour: g.hour || '',
+    league: g.league || '',
+  }));
+
+  // Use the optimized matcher
+  const { odds, matched, unmatched, requestsUsed } = await fetchOddsForCsvMatches(csvMatches, apiKey, date);
+
+  // Convert to existing format for compatibility
+  const oddsMap: Record<number, PreMatchOdds> = {};
+  const fixtureMap: Record<string, number> = {};
+
+  for (const match of matched) {
+    fixtureMap[`${match.csvMatch.home} x ${match.csvMatch.away}`] = match.fixtureId;
+    
+    if (odds[match.fixtureId]) {
+      const apiOdds = odds[match.fixtureId];
+      const markets: Record<string, number> = {};
+      
+      // Map API odds to our format
+      if (apiOdds.bookmakers?.[0]?.bets) {
+        for (const bet of apiOdds.bookmakers[0].bets) {
+          for (const value of bet.values || []) {
+            const label = String(value.value || "");
+            const odd = parseFloat(value.odd || "0");
+            if (odd > 1) {
+              // Map to our expected format
+              if (bet.id === 5 && label.startsWith("Over")) {
+                markets[`Over ${label.replace("Over ", "")} FT`] = odd;
+              }
+              if (bet.id === 26 && label.startsWith("Over")) {
+                markets[`Over ${label.replace("Over ", "")} Gols HT`] = odd;
+              }
+              if (bet.id === 28 && label === "Yes") {
+                markets["Ambas Marcam — Sim"] = odd;
+              }
+              if (bet.id === 45 && label.startsWith("Over")) {
+                markets[`Over ${label.replace("Over ", "")} Cantos FT`] = odd;
+              }
+              if (bet.id === 64 && label.startsWith("Over")) {
+                markets[`${match.apiHomeTeam} Finalizações Over ${label.replace("Over ", "")}`] = odd;
+              }
+              if (bet.id === 65 && label.startsWith("Over")) {
+                markets[`${match.apiAwayTeam} Finalizações Over ${label.replace("Over ", "")}`] = odd;
+              }
+            }
+          }
+        }
+      }
+      
+      oddsMap[match.fixtureId] = {
+        fixtureId: match.fixtureId,
+        bookmaker: "Bet365",
+        markets,
+      };
+    }
+  }
+
+  console.log(`[fetchOddsForCsvGames] Optimized: ${csvMatches.length} CSV games → ${matched.length} matched → ${Object.keys(oddsMap).length} odds, ${requestsUsed} requests`);
+  
+  return { oddsMap, fixtureMap, reqUsed: requestsUsed, matched, unmatched };
 }

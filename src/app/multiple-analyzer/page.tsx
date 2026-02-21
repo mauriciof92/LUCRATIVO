@@ -62,8 +62,13 @@ export default function MultipleAnalyzerPage() {
       // Get today's date in YYYY-MM-DD format
       const today = new Date().toISOString().split('T')[0];
       
-      // Fetch odds from API
-      const oddsResponse = await fetch(`/api/football-odds?date=${today}`);
+      // 🆕 Use POST endpoint with CSV text for optimized fetching
+      const oddsResponse = await fetch('/api/football-odds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csvText: csvText.trim(), date: today })
+      });
+      
       if (!oddsResponse.ok) {
         throw new Error('Failed to fetch odds');
       }
@@ -74,7 +79,12 @@ export default function MultipleAnalyzerPage() {
       setSuggestions(result.suggestions ?? []);
       setSummary(result.summary);
       
-      console.log(`[ODDS] Fetched odds for ${Object.keys(oddsData.oddsMap).length} fixtures, ${oddsData.reqUsed} API calls`);
+      console.log(`[ODDS] Optimized: ${oddsData.matched?.length || 0} matched, ${oddsData.unmatched?.length || 0} unmatched, ${oddsData.reqUsed} requests`);
+      
+      // Show unmatched games warning
+      if (oddsData.unmatched?.length > 0) {
+        console.warn(`[ODDS] Games without odds:`, oddsData.unmatched.map((u: any) => `${u.home} x ${u.away}`));
+      }
       
       if ((result.suggestions ?? []).length === 0) {
         setError(`Nenhuma múltipla gerada com odds reais. ${result.summary.totalGames} jogos no CSV, ${result.summary.qualityGames} com qualidade suficiente.`);
