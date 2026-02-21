@@ -1,6 +1,6 @@
 import './globals.css'
 import { Inter } from 'next/font/google'
-import ServiceWorkerCleanup from './service-worker-cleanup'
+import ClientLayout from './client-layout'
 
 const inter = Inter({ subsets: ['latin'] })
 
@@ -17,8 +17,7 @@ export default function RootLayout({
   return (
     <html lang="pt-BR">
       <body className={inter.className}>
-        <ServiceWorkerCleanup />
-        {children}
+        <ClientLayout>{children}</ClientLayout>
       </body>
     </html>
   )
