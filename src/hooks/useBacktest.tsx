@@ -58,7 +58,11 @@ export const useBacktest = () => {
       try {
         // ── PRIORIDADE 1: Cache local completo (salvo pelo import) ──
         const cached = localStorage.getItem('lucrativo-processed-games');
-        if (cached) {
+        const cacheTimestamp = localStorage.getItem('lucrativo-cache-timestamp');
+        const buildVersion = '2025-02-21-18'; // Cache-buster: atualizar a cada deploy significativo
+        
+        // Se cache existe E é da mesma versão do build, usar cache
+        if (cached && cacheTimestamp === buildVersion) {
           try {
             const parsed = JSON.parse(cached);
             if (Array.isArray(parsed) && parsed.length > 0) {
@@ -74,7 +78,7 @@ export const useBacktest = () => {
                 }
                 return r;
               });
-              console.log(`[HYDRATION] Cache local: ${resolved.length} jogos`);
+              console.log(`[HYDRATION] Cache local v${buildVersion}: ${resolved.length} jogos`);
               setResults(resolved);
               setShowTable(true);
               const savedCsv = localStorage.getItem('lucrativo-last-csv');
@@ -82,6 +86,12 @@ export const useBacktest = () => {
               return;
             }
           } catch { /* cache corrompido, continuar */ }
+        } else if (cached && cacheTimestamp !== buildVersion) {
+          // Cache de versão antiga — invalidar e forçar refresh
+          console.log(`[HYDRATION] Cache antigo v${cacheTimestamp} ≠ build v${buildVersion} — invalidando`);
+          localStorage.removeItem('lucrativo-processed-games');
+          localStorage.removeItem('lucrativo-last-csv');
+          localStorage.removeItem('lucrativo-cache-timestamp');
         }
 
         // ── PRIORIDADE 2: Supabase (fallback remoto) ──
@@ -157,8 +167,9 @@ export const useBacktest = () => {
         console.log(`[HYDRATION] Supabase: ${mapped.length} jogos`);
         setResults(mapped);
         setShowTable(true);
-        // Salvar no cache local para próxima vez ser instantâneo
+        // Salvar no cache local com timestamp para forçar refresh em novos deploys
         localStorage.setItem('lucrativo-processed-games', JSON.stringify(mapped));
+        localStorage.setItem('lucrativo-cache-timestamp', buildVersion);
       } catch (e) {
         console.error('[HYDRATION] Erro:', e);
       } finally {
@@ -259,9 +270,10 @@ export const useBacktest = () => {
         }
       }
 
-      // Salvar no cache local como backup
+      // Salvar no cache local como backup com timestamp
       if (typeof window !== 'undefined') {
         localStorage.setItem('lucrativo-processed-games', JSON.stringify(results));
+        localStorage.setItem('lucrativo-cache-timestamp', '2025-02-21-18'); // Mesma versão do build
       }
     } catch (e: any) {
       setErr("Erro ao importar CSV: " + (e?.message ?? String(e)));
