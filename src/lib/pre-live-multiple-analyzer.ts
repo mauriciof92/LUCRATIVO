@@ -330,7 +330,10 @@ export class PreLiveMultipleAnalyzer {
       } as any;
     };
 
-    // Cada tier tem pool INDEPENDENTE — mesmo jogo pode estar em vários tiers
+    // Pool GLOBAL — mesmo jogo NÃO repete entre bilhetes (1 perna perde ≠ mata 2 bilhetes)
+    const globalUsedGames = new Set<string>();
+    const globalUsedSigs  = new Set<string>();
+
     const buildTicket = (
       nLegs: number,
       typeId: string,
@@ -338,12 +341,17 @@ export class PreLiveMultipleAnalyzer {
       stake: number,
       reason: string
     ): LiveMultipleSuggestion | null => {
-      const localUsed = new Set<string>(); // pool independente por tier
       const selections: any[] = [];
       for (const g of topGames) {
         if (selections.length >= nLegs) break;
-        const sel = this.getSafeSelection(g, localUsed);
-        if (sel) selections.push(buildSelection(g, sel.label, reason));
+        // Mesmo JOGO não pode aparecer em bilhetes diferentes
+        const gameKey = g.home || g.match || '';
+        if (globalUsedGames.has(gameKey)) continue;
+        const sel = this.getSafeSelection(g, globalUsedSigs);
+        if (sel) {
+          selections.push(buildSelection(g, sel.label, reason));
+          globalUsedGames.add(gameKey);
+        }
       }
       if (selections.length < Math.min(nLegs, 2)) return null;
 
