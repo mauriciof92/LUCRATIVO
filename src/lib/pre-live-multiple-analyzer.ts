@@ -157,6 +157,14 @@ export class PreLiveMultipleAnalyzer {
     return 'other';
   }
 
+  // Agrupa eixos finos em famílias para diversidade ENTRE jogos no bilhete
+  // cantos + cantos_ht → "cantos", gols + golsHT + fav_gols → "gols", etc.
+  private broadAxis(fineAxis: string): string {
+    if (fineAxis === 'cantos' || fineAxis === 'cantos_ht') return 'cantos';
+    if (fineAxis === 'gols' || fineAxis === 'golsHT' || fineAxis === 'fav_gols') return 'gols';
+    return fineAxis; // chutes_ht, btts, fav, under, other → já são únicos
+  }
+
   // Pontua especificidade de um mercado: HT por time > HT total > FT específico > FT genérico
   private marketSpecificity(label: string): number {
     const l = label.toLowerCase();
@@ -228,16 +236,10 @@ export class PreLiveMultipleAnalyzer {
     const allCandidates: any[] = [...combo];
     if (main?.label) allCandidates.push(main);
 
-    // Ordenar por especificidade, mas penalizar eixos já presentes no bilhete (-50)
-    allCandidates.sort((a: any, b: any) => {
-      let sa = this.marketSpecificity(a.label);
-      let sb = this.marketSpecificity(b.label);
-      if (ticketAxes) {
-        if (ticketAxes.has(this.inferAxis(a.label))) sa -= 50;
-        if (ticketAxes.has(this.inferAxis(b.label))) sb -= 50;
-      }
-      return sb - sa;
-    });
+    // Ordenar por especificidade
+    allCandidates.sort((a: any, b: any) =>
+      this.marketSpecificity(b.label) - this.marketSpecificity(a.label)
+    );
 
     const selected: any[] = [];
     const usedAxes = new Set<string>(); // Não repetir mesmo eixo no mesmo jogo
@@ -247,9 +249,14 @@ export class PreLiveMultipleAnalyzer {
       if (!opt?.label) continue;
       if (!this.isLabelAllowed(opt.label, game.league || '')) continue;
 
-      // Não repetir mesmo eixo no mesmo jogo (ex: 2 linhas de cantos)
+      // Não repetir mesmo eixo fino no mesmo jogo (ex: 2 linhas de cantos_ht)
       const axis = this.inferAxis(opt.label);
       if (usedAxes.has(axis)) continue;
+
+      // BLOQUEIO FORTE: se a família do eixo já está no bilhete, pular
+      // (ex: se jogo 1 já tem cantos, jogo 2 NÃO pode ter cantos_ht)
+      const broad = this.broadAxis(axis);
+      if (ticketAxes && ticketAxes.has(broad)) continue;
 
       const bestOdd = this.getBestOdd(game, opt.label);
       if (!this.isOddInRange(bestOdd)) continue;
@@ -403,15 +410,23 @@ export class PreLiveMultipleAnalyzer {
       const allSelections: any[] = [];
       let gamesUsed = 0;
 
-      const ticketAxes = new Set<string>(); // Eixos já usados neste bilhete
+      const ticketBroadAxes = new Set<string>(); // Famílias de eixo já usadas neste bilhete
+      const ticketProfiles = new Map<string, number>(); // Perfis usados (max 2 por perfil)
 
       for (const g of topGames) {
         if (gamesUsed >= tier.nGames) break;
 
-        // Extrai 2-3 mercados complementares deste jogo, penalizando eixos já no bilhete
-        const markets = this.getGameMarkets(g, globalUsedSigs, tier.marketsPerGame, ticketAxes);
+        // Cap de perfil: max 2 jogos do mesmo perfil por bilhete
+        const profile = classifyProfile(g);
+        if ((ticketProfiles.get(profile) || 0) >= 2) {
+          console.log(`[SGP-${typeId}] ${g.match}: perfil ${profile} já tem 2 jogos — pulando`);
+          continue;
+        }
+
+        // Extrai mercados, BLOQUEANDO famílias de eixo já presentes no bilhete
+        const markets = this.getGameMarkets(g, globalUsedSigs, tier.marketsPerGame, ticketBroadAxes);
         if (markets.length === 0) {
-          console.log(`[SGP-${typeId}] ${g.match}: 0 mercados — pulando`);
+          console.log(`[SGP-${typeId}] ${g.match}: 0 mercados fora dos eixos já no bilhete — pulando`);
           continue;
         }
 
@@ -422,11 +437,13 @@ export class PreLiveMultipleAnalyzer {
           continue;
         }
 
-        console.log(`[SGP-${typeId}] ✅ ${g.match}: ${markets.length} mercados, gameOdd ${gameOdd.toFixed(2)}`);
+        console.log(`[SGP-${typeId}] ✅ ${g.match} [${profile}]: ${markets.length} mercados, gameOdd ${gameOdd.toFixed(2)}`);
         markets.forEach((m: any) => {
-          console.log(`   → [${m._axis}] ${m.label} @ ${m._resolvedOdd?.toFixed(2)}`);
-          ticketAxes.add(m._axis); // Registrar eixo para diversidade cross-jogo
+          const broad = this.broadAxis(m._axis);
+          console.log(`   → [${broad}/${m._axis}] ${m.label} @ ${m._resolvedOdd?.toFixed(2)}`);
+          ticketBroadAxes.add(broad); // Registrar FAMÍLIA para bloqueio cross-jogo
         });
+        ticketProfiles.set(profile, (ticketProfiles.get(profile) || 0) + 1);
         allSelections.push(...buildSelections(g, markets, reason));
         gamesUsed++;
       }
