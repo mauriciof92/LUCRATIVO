@@ -1,0 +1,320 @@
+################################################################################
+# ⚠️  ATENÇÃO IA — LEIA ANTES DE QUALQUER ALTERAÇÃO NO engine.js
+################################################################################
+#
+# Este documento contém a hierarquia absoluta de regras de negócio do motor
+# de risco do sistema LUCRATIVO. ANTES de sugerir ou implementar qualquer
+# alteração no engine.js, você DEVE consultar estas regras.
+#
+# É TERMINANTEMENTE PROIBIDO:
+#   • Relaxar os Filtros de Elite (APPG e AS Precisão) sem consentimento
+#     explícito e prévio do usuário.
+#   • Sugerir ou implementar Degradação Graceful para dados faltantes
+#     (APPG = 0, AS = 0, Cant37 = 0 = dado ausente = BLOQUEIO TOTAL).
+#   • Remover ou reduzir os Buffers de segurança (+1 acima da linha apostada).
+#   • Remover ou elevar os thresholds de CV (Coeficiente de Variação).
+#   • Suprimir o bypass de Dominância Absoluta (chFavGol >= 8).
+#
+# A PROTEÇÃO DO CAPITAL (buffers + consistência) TEM PRECEDÊNCIA ABSOLUTA
+# sobre o volume de múltiplas geradas. Prefere-se gerar 0 múltiplas a
+# sugerir uma aposta sem dados suficientes.
+#
+# Qualquer proposta de relaxamento DEVE ser apresentada como plano (plan file),
+# com justificativa quantitativa, e aguardar aprovação explícita do usuário.
+#
+################################################################################
+
+
+================================================================================
+ESTATUTO DO MOTOR DE APOSTAS — LUCRATIVO v1.0
+Arquivo: src/engine.js
+Data de calibração: 2026-02-20 (v1.3)
+================================================================================
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+§1. QUALIFICAÇÃO DO JOGO (Score Mínimo)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Score de interesse (computeScore) — pesos:
+  • xG           20%  — xG range útil: 1.2 – 4.0 [EMENDA v1.3]
+  • afDiff       19%  — diferença de AF range útil: 0 – 35
+  • volatilidade 20%  — CV invertido, range útil: 25 – 70
+  • xC           22%  — xC range útil: 6 – 12 [EMENDA v1.3]
+  • favShots HT  13%  — chutes HT fav, range útil: 0 – 4 [EMENDA v1.3]
+
+Bônus de score:
+  • afDiff > 30 AND cv < 40     → +0.08 (força extrema + baixa volatilidade)
+  • exG >= 3.0 AND exC >= 9     → +0.06 (jogo aberto)
+  • 12 <= afDiff <= 22 AND cv <= 40 → +0.04 (equilíbrio otimizado)
+
+GATE: score < 0.50 → jogo BLOQUEADO (nenhum mercado sugerido)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+§2. PERFIS DE CLASSIFICAÇÃO (classifyProfile)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  dominant            afDiff >= 40 AND afFav >= 70 AND exG >= 3
+  chutes_ht_fav       afDiff >= 20 AND chFavGol >= 4 AND exG >= 2.5
+  high_offense_balanced exG >= 4 AND afDiff <= 15 AND afUnder >= 30
+  clear_favorite      afDiff >= 25 AND exG >= 3
+  slight_fav_offensive 15 <= afDiff < 25 AND exG >= 3
+  corner_dominant     exC >= 11
+  balanced_btts       afDiff <= 15 AND exG >= 3.5 AND afUnder >= 45 AND cv <= 40
+  corner_heavy        exC >= 9 AND exG < 3
+  low_goals           exG < 2.5 AND cv >= 30
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+§3. LIGAS PROIBIDAS PARA FINALIZAÇÕES HT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Finalizações HT (main e secundário) são BLOQUEADAS para:
+  League One | AFC Champions League Elite | Eredivisie | 1. Lig
+  Europa Conference League | Pro League | Eerste Divisie | Super Lig
+
+Nesses campeonatos, o fallback é sempre Over 1.5 FT.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+§4. MERCADO: FINALIZAÇÕES HT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+── 4.1 Mercado Principal (suggestMainMarket — perfil chutes_ht_fav)
+   Buffer +1 em cada linha (média de chutes deve estar 1 ACIMA da linha):
+   chFavGol >= 7  →  Over 5.5 Finalizações HT
+   chFavGol >= 6  →  Over 4.5 Finalizações HT
+   chFavGol >= 5  →  Over 3.5 Finalizações HT
+   chFavGol <  5  →  FALLBACK Over 1.5 FT (buffer insuficiente)
+
+── 4.2 Mercado Secundário / Combo (suggestCombo)
+   FILTROS DE ELITE — INEGOCIÁVEIS (ambos obrigatórios):
+     • AS Precisão do favorito  >= 35%   [EMENDA v1.1 — era 40%]
+     • APPG do favorito         >= 0.80  [EMENDA v1.1 — era 0.90]
+   SE dado for 0, nulo, ausente, NaN → BLOQUEIO TOTAL deste mercado
+
+   ⚡ BYPASS BLITZ — gap >= 45 + chFavGol >= 6.5 + dfZebra < 30 [CALIBRAGEM v1.2]
+   dfZebra = defesa da zebra (0 = dado ausente → bypass NÃO dispara)
+   Se dfZebra >= 30 → exige filtros elite (APPG/AS) mesmo com gap
+
+   Buffer +1 (via filtros elite):
+   chFavGol >= 7                     → Over 5.5
+   chFavGol >= 6                     → Over 4.5
+   chFavGol >= 5 AND afDiff >= 15    → Over 3.5
+   chFavTot >= 9                     → Over 6.5 (total shots HT)
+
+── 4.3 Bypass de Dominância Absoluta (chFavGol >= 8)
+   ÚNICO caso em que APPG/AS não são exigidos:
+   chFavGol >= 8 AND main.axis = fav_gols AND liga permitida → Over 6.5 (ícone 🔥)
+   Justificativa: 8+ chutes ao gol no HT = evidência estatística autossuficiente.
+   ESTE BYPASS NÃO PODE SER ESTENDIDO A OUTROS THRESHOLDS sem aprovação.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+§5. MERCADO: CANTOS HT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+── 5.1 Mercado Principal (corner_heavy profile)
+   cantFavHT >= 4.5 AND cvCantosHT <= 55  →  Over 3.5 Cantos HT
+   (fallback: exC >= 10.5 AND cvCantos <= 45 → Over 8.5 Cantos FT)
+   (fallback final: Over 1.5 FT)
+
+── 5.2 Mercado Secundário / Combo (suggestCombo)
+   FILTROS DE ELITE — INEGOCIÁVEIS:
+     • APPG do favorito          >= 0.60  [Flexibilização de Captação]
+     • Cant37-HT do favorito     >= 0.20  [Flexibilização de Captação]
+   SE dado for 0, nulo, ausente → BLOQUEIO TOTAL deste mercado
+
+   ⚡ BYPASS BLITZ — gap >= 45 + chFavGol >= 6.5 + dfZebra < 30 [CALIBRAGEM v1.2]
+   dfZebra = defesa da zebra (0 = dado ausente → bypass NÃO dispara)
+   Se dfZebra >= 30 → exige filtros elite (APPG/AS) mesmo com gap
+
+   Trava de consistência: cvCantosHT <= 65 (vs 55 padrão) [Flexibilização de Captação]
+   Condição especial: afFav > 80 permite cantFavHT >= 3.8 [EMENDA v1.3]
+   Buffer +1 (cantFavHT deve ser 1 acima da linha):
+     cantFavHT >= 4.5                                  →  Gate mínimo de ativação
+     cantFavHT >= 3.8 (se afFav > 80)                   →  Gate reduzido [EMENDA v1.3]
+     cantFavHT >= 5.5 AND perc5EscanteiosHT >= 45%    →  Over 4.5 Cantos HT
+     perc4EscanteiosHT >= 55%                          →  Over 3.5 Cantos HT (com perc)
+     else                                               →  Over 3.5 Cantos HT (sem perc)
+
+── 5.3 Diversificação Inteligente (filtro inverso)
+   Eixos: QUALQUER eixo permitido, EXCETO perfis bloqueados
+   Perfis bloqueados: low_goals, under_gols
+   Condições base: chFavGol >= 6 AND cantFavHT >= 2.5
+   
+   🔥 SOBERANIA DO VOLUME (CONFIRMADA):
+   Se chFavGol >= 7.0 → diversificação MANDATÓRIA (ignora cedeCantos)
+   Se chFavGol < 7.0 → respeita lógica tradicional
+   
+   🎯 FLEXIBILIZAÇÃO:
+   Se cantFavHT >= 3.0 → volume prevalece (cedeCantos opcional)
+   Se cantFavHT < 3.0 → exige cedeCantos
+   
+   cedeCantos = mediaEscanteiosSofridosHT >= 2.0 OR percMais4EscanteiosHT >= 40%
+   Dados ausentes: assume 35% para não bloquear
+   Objetivo: Capturar Cambuur (7.8 chutes) e outros jogos de elite
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+§6. MERCADO: CANTOS FT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+── 6.1 Mercado Principal por Perfil
+   corner_dominant  exC >= 12.0 AND cvCantos <= 40  →  Over 8.5 Cantos FT   [EMENDA v1.2]
+                    Abaixo disso                     →  FALLBACK Over 1.5 FT
+   corner_heavy     exC >= 12.0 AND cvCantos <= 40  →  Over 8.5 Cantos FT (fallback) [EMENDA v1.2]
+   default          exC >= 12.0 AND cvCantos <= 40  →  Over 8.5 Cantos FT   [EMENDA v1.2]
+
+── 6.2 Mercado Secundário / Combo (suggestCombo)
+   FILTROS:
+     • APPG do favorito  >= 0.90   (se 0/nulo → BLOQUEIO TOTAL)
+     • exC               >= 12.0   [EMENDA v1.2 — era 10.5] (buffer de 3.5 acima da linha 8.5)
+     • cvCantos          <= 40     [EMENDA v1.2 — era 45] (consistência de elite)
+   Linha: Over 8.5 Cantos FT
+   Refinamento por período: cantos21a30 + cantos31a40 >= 4 → rótulo "FT (Final)"
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+§7. MERCADO: GOL HT (Over 0.5 Gols HT)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+   gol05HTFav >= 68%   (probabilidade histórica mínima — 60% era coin flip)
+   chFavHT    >= 2.0   (confirma pressão ofensiva real no 1º tempo)
+   Ambas as condições são obrigatórias. Dado ausente = BLOQUEIO.
+
+   Mercado principal clear_favorite (afDiff >= 35):
+     Vence + Over 0.5 HT (eixo golsHT_fav)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+§8. MÚLTIPLAS — QUALIFICAÇÃO DA TRÍADE (generateQualityMultiples)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+   GATE de entrada na tríade: score >= 0.55 AND conf >= 0.45
+   Jogos abaixo deste threshold são descartados antes da composição.
+
+   Bronze (2 pernas)  — risco baixo    — stake 2.0u
+   Silver (3 pernas)  — risco médio    — stake 3.0u
+   Gold   (4 pernas)  — risco alto     — stake 4.0u
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+§9. MAPEAMENTO DE COLUNAS CSV (csv-helper.ts — CSV_MAPPER)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+   Índices críticos para as regras de elite:
+   Col 42  avg_chutes_ht    — Média total chutes HT (Casa | Fora)
+   Col 31  shotsOnHT        — Média chutes ao gol HT (Casa | Fora)  [chFavGol]
+   Col 19  cantHTFor        — Média cantos marcados HT (Casa | Fora) [cantFavHT]
+   Col 45  cantos_37_ht     — Média cantos 37-HT (Casa | Fora)       [favCant37]
+   Col 46  as_precisao      — AS % Precisão nos chutes (Casa | Fora) [favAsPrec]
+   Col 47  appg             — % Ataques perigosos/min (Casa | Fora)  [favAppg]
+
+   FORMATO: cols 46 e 47 são PIPE-SEPARADAS ("Casa | Fora").
+   Se a coluna não existir no CSV → valor = 0 → FILTROS DE ELITE BLOQUEIAM.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+§11. PREFERÊNCIA ATIVA POR MERCADOS HT [EMENDA v1.3]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Hierarquia de exibição do mainMarket:
+  1. Finalizações HT (se viável)
+  2. Cantos HT (se viável)
+  3. Over 1.5 FT (fallback)
+
+Objetivo: Priorizar oportunidades HT sobre mercados FT tradicionais.
+
+Thresholds reduzidos para captação:
+  • APPG mínimo: 0.65 (vs 0.80 anterior)
+  • Cant37 mínimo: 0.20 (vs 0.25 anterior)
+  • cantFavHT: 3.8 se afFav > 80 (vs 4.5 padrão)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+§13. FLEXIBILIZAÇÃO DE CAPTAÇÃO [AJUSTE DE CAPTAÇÃO]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Exclusivo para perfis corner_dominant/corner_heavy:
+  • cvCantosHT <= 65 (vs 55 padrão)
+  • APPG >= 0.60 (vs 0.65 padrão)
+  • Cant37 >= 0.20 (mantido)
+  • Exibição obrigatória de mercado de cantos
+  • Sem limitadores de quantidade em combos
+
+Objetivo: Evitar fallback para gols por pequenas oscilações quando volume bruto é alto.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+§14. TABELA RESUMO — O QUE NUNCA PODE SER FEITO SEM APROVAÇÃO EXPLÍCITA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• Relaxar os Filtros de Elite (APPG e AS Precisão) sem consentimento explícito
+• Implementar Degradação Graceful para dados faltantes (0 = BLOQUEIO TOTAL)
+• Remover ou reduzir os Buffers de segurança (+1 acima da linha)
+• Remover ou elevar os thresholds de CV (Coeficiente de Variação)
+• Suprimir o bypass de Dominância Absoluta (chFavGol >= 8)
+• Permitir sugestões com as_precisao == 0 OU appg == 0 [CALIBRAGEM v1.2]
+  (exceção: bypass de dominância extrema chFavGol >= 8)
+
+A PROTEÇÃO DO CAPITAL TEM PRECEDÊNCIA ABSOLUTA sobre o volume.
+
+  PROIBIÇÃO                                MOTIVO
+  ─────────────────────────────────────    ─────────────────────────────────
+  Baixar APPG < 0.80                       Permite times sem pressão real
+                                            [EMENDA v1.1: limite descido de 0.90]
+  Baixar AS precisão < 35%                 Permite times bipolares/imprecisos
+                                            [EMENDA v1.1: limite descido de 40%]
+  Degradação graceful (0 = ok)             Aposta às cegas sem dado confirmado
+  Subir cvCantosHT > 55                    Inclui padrões de canto instáveis
+  Subir cvCantos > 55 (FT principal)       Idem para cantos totais
+  Subir cvCantos > 45 (FT secundário)      Idem — filtro mais estrito no combo
+  Remover buffer +1 das linhas             Volta ao problema de "buffer zero"
+  Estender bypass chFavGol >= 8            Cria exceções fora do contexto de
+  para outros mercados sem aprovação        dominância absoluta comprovada
+  Adicionar ligas às exceções de HT        Cada liga excluída tem histórico
+  sem backtest validado                     de quebra confirmado
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+§11. CALIBRAÇÃO DE DEFESA — Gatilhos de Debilidade Defensiva (v1.3)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Fonte de dados: col 43 do CSV → dfH (defesa casa) e dfA (defesa visitante).
+SE dfZebra = 0 (dado ausente) → NENHUM gatilho dispara. Proteção mantida.
+dfZebra = dfA se favorito é Casa (🏠) | dfH se favorito é Fora (✈️)
+
+── 11.1 Gatilho "Manteiga" 🚀 (suggestMainMarket — perfil chutes_ht_fav)
+   Condição: dfZebra < 35 AND afFav > 75 (defesa fraquíssima + ataque forte)
+   Efeito:   ELEVA A LINHA SUGERIDA em +1 (Over 3.5 → Over 4.5, etc.)
+   Ícone:    🚀 (em vez de 🎯) para sinalizar elevação defensiva
+   Lógica:   Defesa frágil implica volume de chutes acima da média histórica
+             do próprio time — o histórico subestima o potencial do jogo.
+
+   Tabela de elevação com Manteiga ativo:
+   chFavGol >= 7  →  Over 6.5 🚀  (era Over 5.5)
+   chFavGol >= 6  →  Over 5.5 🚀  (era Over 4.5)
+   chFavGol >= 5  →  Over 4.5 🚀  (era Over 3.5)
+   chFavGol <  5  →  Over 1.5 FT  (fallback — buffer insuficiente mesmo com Manteiga)
+
+── 11.2 Bypass "Blitz" ⚡ (suggestCombo)
+   Condição: (afFav - dfZebra) >= 45 AND chFavGol >= 5 AND liga permite HT
+   Efeito:   Libera candidato "⚡ Blitz HT" em suggestCombo SEM exigir APPG/AS
+   Buffer:   MANTIDO — chFavGol >= 7 → Over 5.5 | >= 6 → Over 4.5 | >= 5 → Over 3.5
+   Lógica:   Gap ofensivo/defensivo >= 45 é evidência cruzada de massacre HT.
+             O gap substitui o papel de AS/APPG como confirmador de volume.
+
+── 11.3 Gatilho "Desespero" — REJEITADO
+   Condição proposta: dfZebra < 40 AND cantFavHT > 2.5
+   Motivo de rejeição: cantFavHT > 2.5 é INFERIOR ao nosso buffer de 4.5.
+   Sugerir Over 3.5 Cantos HT com média de 2.6 viola a trava de +1.
+   ESTE GATILHO NUNCA DEVE SER IMPLEMENTADO sem revisão total dos buffers.
+
+── 11.4 Proibições adicionais desta seção
+   • Não estender o "Manteiga" para perfis além de chutes_ht_fav sem aprovação
+   • Não baixar o threshold de blitzGap abaixo de 45 sem backtest
+   • Não suprimir a guarda dfZebra > 0 (dado ausente = sem bypass)
+   • Não criar score bonus / multiplicadores de confiança — usar lógica discreta
+
+################################################################################
+# FIM DO ESTATUTO — Versão 1.3 — Mantido por: Gestor de Risco
+################################################################################
