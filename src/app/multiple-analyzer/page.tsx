@@ -52,7 +52,7 @@ export default function MultipleAnalyzerPage() {
       setSuggestions(result.suggestions ?? []);
       setSummary(result.summary);
       if ((result.suggestions ?? []).length === 0) {
-        setError(`Nenhuma múltipla gerada. ${result.summary.totalGames} jogos no banco, ${result.summary.qualityGames} com qualidade suficiente (score≥55%, conf≥45%).`);
+        setError(`Nenhuma múltipla gerada. ${result.summary.totalGames} jogos no banco, ${result.summary.qualityGames} com qualidade suficiente (score≥65%, conf≥55%). Cada perna precisa de odd entre 1.20–2.50.`);
       }
     } catch (e: any) {
       setError('Erro ao analisar: ' + (e?.message ?? String(e)));
