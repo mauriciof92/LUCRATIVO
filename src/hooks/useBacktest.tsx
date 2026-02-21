@@ -3,7 +3,7 @@ import { runBacktest, processNSGames, enrichWithRealStats, validateWithManualInp
 import { loadStoredBacktest, saveStoredBacktest, type StoredBacktest } from "../lib/storage";
 import { fetchRealStatsForMatches, fetchFixtureStatistics } from "../lib/footballApi";
 import { parseCSV } from "../engine";
-import { supabase } from "../lib/supabase";
+import { supabase, supabaseConfigured } from "../lib/supabase";
 import { Badge, KPI, TH, TD, mktCat, C } from "../components/ui";
 
 // 🆕 CONSTANTE GLOBAL - STAKE FIXA R$ 25,00
@@ -85,6 +85,11 @@ export const useBacktest = () => {
         }
 
         // ── PRIORIDADE 2: Supabase (fallback remoto) ──
+        if (!supabaseConfigured) {
+          console.log('[HYDRATION] Supabase não configurado — modo offline');
+          setLoading(false);
+          return;
+        }
         console.log('[HYDRATION] Sem cache local, buscando Supabase...');
         const { data: betData, error } = await supabase
           .from('bet_results')
@@ -225,28 +230,30 @@ export const useBacktest = () => {
       console.log(`[CSV-IMPORT] ${results.length} jogos importados (NS+FT) com engine completo`);
 
       // Salvar no Supabase com dados completos (incluindo favorito e combo)
-      const upsertRows = results.map(r => ({
-        id: r.id,
-        match: r.match,
-        league: r.league,
-        hour: r.hour,
-        status: r.status,
-        result_home: r.resultHome,
-        result_away: r.resultAway,
-        profile: r.profile,
-        score: r.score,
-        confidence: r.confidence,
-        main_market_label: r.mainMarket.label,
-        main_market_odd: r.mainMarket.odd,
-        main_market_result: r.mainMarket.result,
-        main_market_profit: r.mainMarket.profit,
-        favorito_data: JSON.stringify(r.favorito ?? {}),
-        combo_data: JSON.stringify(r.combo ?? []),
-        poison_data: JSON.stringify(r.poison ?? {}),
-      }));
-      const { error: upsertErr } = await supabase.from('bet_results').upsert(upsertRows, { onConflict: 'id' });
-      if (upsertErr) console.warn('[CSV-IMPORT] Supabase upsert warning:', upsertErr.message);
-      else console.log(`[CSV-IMPORT] ${upsertRows.length} jogos salvos no Supabase`);
+      if (supabaseConfigured) {
+        const upsertRows = results.map(r => ({
+          id: r.id,
+          match: r.match,
+          league: r.league,
+          hour: r.hour,
+          status: r.status,
+          result_home: r.resultHome,
+          result_away: r.resultAway,
+          profile: r.profile,
+          score: r.score,
+          confidence: r.confidence,
+          main_market_label: r.mainMarket.label,
+          main_market_odd: r.mainMarket.odd,
+          main_market_result: r.mainMarket.result,
+          main_market_profit: r.mainMarket.profit,
+          favorito_data: JSON.stringify(r.favorito ?? {}),
+          combo_data: JSON.stringify(r.combo ?? []),
+          poison_data: JSON.stringify(r.poison ?? {}),
+        }));
+        const { error: upsertErr } = await supabase.from('bet_results').upsert(upsertRows, { onConflict: 'id' });
+        if (upsertErr) console.warn('[CSV-IMPORT] Supabase upsert warning:', upsertErr.message);
+        else console.log(`[CSV-IMPORT] ${upsertRows.length} jogos salvos no Supabase`);
+      }
 
       // Salvar no cache local como backup
       if (typeof window !== 'undefined') {
