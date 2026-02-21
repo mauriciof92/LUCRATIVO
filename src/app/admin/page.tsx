@@ -15,6 +15,7 @@ export default function AdminPage() {
     loading,
     results,
     err,
+    saveError,
     
     // Funções do hook
     handleImport,
@@ -132,6 +133,25 @@ export default function AdminPage() {
 
       <div style={{ padding: '40px' }}>
         
+        {/* Alerta de erro de sincronização */}
+        {saveError && (
+          <div style={{ 
+            background: '#3a1a1a', 
+            border: '1px solid #f85149', 
+            borderRadius: 8, 
+            padding: 12, 
+            marginBottom: 24,
+            color: '#f85149', 
+            fontSize: 13,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8
+          }}>
+            <AlertTriangle size={16} />
+            ⚠️ {saveError}
+          </div>
+        )}
+
         {/* Título */}
         <div style={{ marginBottom: 32 }}>
           <h1 style={{ fontSize: 28, fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: 12 }}>

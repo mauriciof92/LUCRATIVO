@@ -49,6 +49,7 @@ export const useBacktest = () => {
 
   // 🆕 FASE 5.3: Estado global para sincronização
   const [isGlobalSyncing, setIsGlobalSyncing] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Hydration: localStorage (instantâneo) → Supabase (fallback remoto)
   useEffect(() => {
@@ -241,8 +242,20 @@ export const useBacktest = () => {
       console.log(`[CSV-IMPORT] ${results.length} jogos importados (NS+FT) com engine completo`);
 
       // Salvar no Supabase com dados completos (incluindo favorito e combo)
+      setSaveError(null); // Limpar erro anterior
       if (supabaseConfigured) {
         try {
+          // Verificar conexão antes
+          const { error: pingErr } = await supabase
+            .from('bet_results')
+            .select('id')
+            .limit(1);
+            
+          if (pingErr) {
+            console.error('[SAVE] Supabase inacessível:', pingErr.message);
+            throw pingErr;
+          }
+
           const upsertRows = results.map(r => ({
             id: r.id,
             match: r.match,
@@ -262,11 +275,40 @@ export const useBacktest = () => {
             combo_data: JSON.stringify(r.combo ?? []),
             poison_data: JSON.stringify(r.poison ?? {}),
           }));
-          const { error: upsertErr } = await supabase.from('bet_results').upsert(upsertRows, { onConflict: 'id' });
-          if (upsertErr) console.warn('[CSV-IMPORT] Supabase upsert warning:', upsertErr.message);
-          else console.log(`[CSV-IMPORT] ${upsertRows.length} jogos salvos no Supabase`);
-        } catch (e) {
-          console.warn('[CSV-IMPORT] Supabase indisponível (CORS/rede) — dados salvos apenas no cache local');
+
+          // Salvar em lotes de 50 para evitar timeout
+          const BATCH = 50;
+          let totalSaved = 0;
+          
+          for (let i = 0; i < upsertRows.length; i += BATCH) {
+            const batch = upsertRows.slice(i, i + BATCH);
+            const { data, error: upsertErr } = await supabase
+              .from('bet_results')
+              .upsert(batch, { 
+                onConflict: 'id',
+                ignoreDuplicates: false 
+              })
+              .select('id');
+              
+            if (upsertErr) {
+              console.error(`[SAVE] Erro no lote ${i}-${i+BATCH}:`, 
+                upsertErr.message, upsertErr.details);
+              setSaveError(`Erro ao salvar lote ${i}-${i+BATCH}: ${upsertErr.message}`);
+            } else {
+              totalSaved += data?.length ?? batch.length;
+              console.log(`[SAVE] Lote ${i}-${i+BATCH}: OK (${data?.length ?? batch.length} registros)`);
+            }
+          }
+          
+          if (totalSaved === upsertRows.length) {
+            console.log(`[SAVE] ✅ Total salvo: ${totalSaved}/${upsertRows.length}`);
+          } else {
+            setSaveError(`Salvo parcialmente: ${totalSaved}/${upsertRows.length}. Verifique conexão.`);
+          }
+          
+        } catch (e: any) {
+          console.error('[SAVE] Falha crítica:', e?.message ?? e);
+          setSaveError('Dados salvos localmente. Sincronização pendente - verifique conexão.');
         }
       }
 
@@ -616,6 +658,7 @@ export const useBacktest = () => {
     enrichErr,
     manualInputs,
     isGlobalSyncing,
+    saveError,
     
     // Setters
     setFile,
