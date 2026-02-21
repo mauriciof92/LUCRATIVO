@@ -4,6 +4,7 @@ import { useState, useRef, useMemo } from 'react';
 import { useBacktest } from '../../hooks/useBacktest';
 import { NavHeader } from '../../components/NavHeader';
 import { PreLiveMultipleAnalyzer } from '../../lib/pre-live-multiple-analyzer';
+import type { PreMatchOdds } from '../../lib/footballApi';
 
 const C = {
   bg: '#0d1117', surface: '#161b22', border: '#30363d',
@@ -15,6 +16,7 @@ const C = {
 export default function MultipleAnalyzerPage() {
   const { results } = useBacktest();
   const [analyzing, setAnalyzing] = useState(false);
+  const [loadingOdds, setLoadingOdds] = useState(false);
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
   const [error, setError] = useState('');
@@ -49,6 +51,39 @@ export default function MultipleAnalyzerPage() {
       setError(String(e?.message ?? e));
     } finally {
       setAnalyzing(false);
+    }
+  };
+
+  const handleFetchOdds = async () => {
+    if (!csvText.trim()) return;
+    setLoadingOdds(true);
+    setError('');
+    try {
+      // Get today's date in YYYY-MM-DD format
+      const today = new Date().toISOString().split('T')[0];
+      
+      // Fetch odds from API
+      const oddsResponse = await fetch(`/api/football-odds?date=${today}`);
+      if (!oddsResponse.ok) {
+        throw new Error('Failed to fetch odds');
+      }
+      const oddsData = await oddsResponse.json();
+      
+      // Re-analyze with real odds
+      const result = analyzer.analyzeLiveMultiples(csvText, oddsData.oddsMap, oddsData.fixtureMap);
+      setSuggestions(result.suggestions ?? []);
+      setSummary(result.summary);
+      
+      console.log(`[ODDS] Fetched odds for ${Object.keys(oddsData.oddsMap).length} fixtures, ${oddsData.reqUsed} API calls`);
+      
+      if ((result.suggestions ?? []).length === 0) {
+        setError(`Nenhuma múltipla gerada com odds reais. ${result.summary.totalGames} jogos no CSV, ${result.summary.qualityGames} com qualidade suficiente.`);
+      }
+    } catch (err) {
+      console.error('Erro ao buscar odds:', err);
+      setError('Erro ao buscar odds. Verifique o console.');
+    } finally {
+      setLoadingOdds(false);
     }
   };
 
@@ -100,19 +135,35 @@ export default function MultipleAnalyzerPage() {
               resize: 'vertical', boxSizing: 'border-box',
             }}
           />
-          <div style={{ marginTop: 12, display: 'flex', gap: 12, alignItems: 'center' }}>
+          <div style={{ marginTop: 12, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
             <button
               onClick={handleAnalyze}
-              disabled={analyzing || !csvText.trim()}
+              disabled={analyzing || loadingOdds || !csvText.trim()}
               style={{
-                background: analyzing || !csvText.trim() ? C.muted : C.blue,
+                background: analyzing || loadingOdds || !csvText.trim() ? C.muted : C.blue,
                 color: '#000', border: 'none', borderRadius: 8,
                 padding: '10px 24px', fontSize: 14, fontWeight: 700,
-                cursor: analyzing || !csvText.trim() ? 'not-allowed' : 'pointer',
+                cursor: analyzing || loadingOdds || !csvText.trim() ? 'not-allowed' : 'pointer',
+                flex: 1,
               }}
             >
               {analyzing ? '⏳ Analisando...' : '⚡ Gerar Múltiplas'}
             </button>
+            
+            <button
+              onClick={handleFetchOdds}
+              disabled={loadingOdds || analyzing || !csvText.trim()}
+              style={{
+                background: loadingOdds || analyzing || !csvText.trim() ? C.muted : 'linear-gradient(135deg, #2196F3, #1976D2)',
+                color: '#fff', border: 'none', borderRadius: 8,
+                padding: '10px 24px', fontSize: 14, fontWeight: 700,
+                cursor: loadingOdds || analyzing || !csvText.trim() ? 'not-allowed' : 'pointer',
+                flex: 1,
+              }}
+            >
+              {loadingOdds ? '⏳ Buscando...' : '🎲 Buscar Odds Reais'}
+            </button>
+            
             {csvText && (
               <button
                 onClick={() => { setCsvText(''); setFileName(''); setSuggestions([]); setSummary(null); setError(''); }}
@@ -206,7 +257,7 @@ export default function MultipleAnalyzerPage() {
                           <div style={{ fontWeight: 600, fontSize: 14 }}>{leg.game?.home ?? leg.match ?? '—'}</div>
                           <div style={{ color: C.muted, fontSize: 11, marginTop: 2 }}>{leg.game?.league ?? leg.league ?? ''} · {leg.game?.hour ?? leg.hour ?? ''}</div>
                         </div>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                           <span style={{ background: '#0d2a0d', color: C.green, padding: '3px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600 }}>
                             {leg.market ?? leg.label ?? '—'}
                           </span>
@@ -214,6 +265,21 @@ export default function MultipleAnalyzerPage() {
                             ? <span style={{ color: C.text, fontWeight: 700, fontSize: 14 }}>{leg.odd.toFixed(2)}</span>
                             : <span style={{ color: C.muted, fontSize: 11, fontStyle: 'italic' }}>sem odd no CSV</span>
                           }
+                          {/* 🆕 Odd quality tag */}
+                          {leg.oddTag && (
+                            <span className={`selection-tag ${
+                              leg.oddTag === 'SEM ODD' ? 'tag-noodd' : 
+                              leg.oddTag === 'ODD BAIXA' ? 'tag-lowodd' : ''
+                            }`} style={{
+                              padding: '2px 8px',
+                              borderRadius: 4,
+                              fontSize: 10,
+                              fontWeight: 800,
+                              textTransform: 'uppercase',
+                            }}>
+                              {leg.oddTag === 'SEM ODD' ? '🔴 SEM ODD' : '🟠 ODD BAIXA'}
+                            </span>
+                          )}
                         </div>
                       </div>
                     ))}
