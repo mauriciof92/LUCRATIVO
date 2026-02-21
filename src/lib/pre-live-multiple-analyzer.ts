@@ -140,22 +140,48 @@ export class PreLiveMultipleAnalyzer {
     return (typeof csvOdd === 'number' && !isNaN(csvOdd) && csvOdd > 1) ? csvOdd : null;
   }
 
-  // 🔧 Seleção segura: mainMarket primeiro, combo fallback, odd 1.20–2.50
+  // Pontua especificidade de um mercado: HT por time > HT total > FT específico > FT genérico
+  private marketSpecificity(label: string): number {
+    const l = label.toLowerCase();
+    // Finalizações HT por time (ex: "Arsenal — Finalizações HT Over 5.5")
+    if ((l.includes('finaliz') || l.includes('chute')) && l.includes('ht')) return 100;
+    // Cantos HT por time (ex: "Arsenal — Over 3.5 Cantos HT")
+    if ((l.includes('canto') || l.includes('escanteio')) && l.includes('ht')) return 90;
+    // Blitz HT
+    if (l.includes('blitz')) return 95;
+    // Cantos FT (ex: "Over 8.5 Cantos FT")
+    if (l.includes('canto') || l.includes('escanteio')) return 70;
+    // Gols HT com time (ex: "Vence + Over 0.5 HT")
+    if (l.includes('ht') && l.includes('vence')) return 60;
+    // Over 2.5 FT / BTTS
+    if (l.includes('over 2.5') || l.includes('ambas marcam') || l.includes('btts')) return 40;
+    // Over 1.5 FT / Vence genérico — último recurso
+    if (l.includes('over 1.5')) return 10;
+    if (l.includes('vence')) return 20;
+    return 30;
+  }
+
+  // 🔧 Seleção inteligente: linhas específicas (HT por time) primeiro, genéricas por último
   private getSafeSelection(game: any, usedSignatures: Set<string>): any {
-    // 1. Tentar mercado principal primeiro (mais seguro)
+    const combo = suggestCombo(game) || [];
     const main = suggestMainMarket(game);
-    if (main?.label) {
-      const candidates = [main, ...(suggestCombo(game) || [])];
-      for (const opt of candidates) {
-        if (!opt || !opt.label) continue;
-        if (!this.isLabelAllowed(opt.label, game.league || '')) continue;
-        const bestOdd = this.getBestOdd(game, opt.label);
-        if (!this.isOddInRange(bestOdd)) continue;
-        const signature = `${game.home}_${opt.label}`;
-        if (!usedSignatures.has(signature)) {
-          usedSignatures.add(signature);
-          return { ...opt, _resolvedOdd: bestOdd };
-        }
+
+    // Juntar todos os candidatos: combo (específicos) + mainMarket (fallback)
+    const allCandidates = [...combo];
+    if (main?.label) allCandidates.push(main);
+
+    // Ordenar por especificidade decrescente
+    allCandidates.sort((a, b) => this.marketSpecificity(b.label) - this.marketSpecificity(a.label));
+
+    for (const opt of allCandidates) {
+      if (!opt || !opt.label) continue;
+      if (!this.isLabelAllowed(opt.label, game.league || '')) continue;
+      const bestOdd = this.getBestOdd(game, opt.label);
+      if (!this.isOddInRange(bestOdd)) continue;
+      const signature = `${game.home}_${opt.label}`;
+      if (!usedSignatures.has(signature)) {
+        usedSignatures.add(signature);
+        return { ...opt, _resolvedOdd: bestOdd };
       }
     }
     return null;
