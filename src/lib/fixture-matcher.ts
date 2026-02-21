@@ -23,6 +23,13 @@ const ABBREVIATIONS: Record<string, string> = {
   'newcastle': 'newcastle united',
   'west ham': 'west ham united',
   'brighton': 'brighton hove albion',
+  'sporting braga': 'sc braga',
+  'braga': 'sc braga',
+  'vitoria guimaraes': 'vitoria sc',
+  'vitoria sc': 'vitoria sc',
+  'queens park rangers': 'qpr',
+  'hearts': 'heart of midlothian',
+  'internacional de bogota': 'internacional bogota',
 };
 
 export function normalizeTeamName(raw: string): string {
@@ -117,7 +124,7 @@ export interface MatchResult {
 export function matchFixtures(
   csvMatches: CsvMatch[],
   apiFixtures: ApiFixture[],
-  minConfidence = 0.65
+  minConfidence = 0.55
 ): { matched: MatchResult[]; unmatched: CsvMatch[] } {
   const matched: MatchResult[] = [];
   const unmatched: CsvMatch[] = [];
@@ -160,6 +167,11 @@ export function matchFixtures(
         apiAwayTeam: bestFixture.awayTeam,
       });
     } else {
+      // 🆕 Log borderline para diagnóstico (45-54%)
+      if (bestScore >= 0.45 && bestScore < minConfidence && bestFixture) {
+        console.info(`[Matcher] Borderline: CSV="${csvMatch.home} x ${csvMatch.away}" | Candidato="${bestFixture.homeTeam} x ${bestFixture.awayTeam}" | Score=${(bestScore*100).toFixed(0)}%`);
+      }
+      
       // Log para diagnóstico
       console.warn(`[Matcher] Sem match para: ${csvMatch.home} x ${csvMatch.away}`,
         bestFixture

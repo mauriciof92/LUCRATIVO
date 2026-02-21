@@ -22,6 +22,8 @@ export default function MultipleAnalyzerPage() {
   const [error, setError] = useState('');
   const [csvText, setCsvText] = useState('');
   const [fileName, setFileName] = useState('');
+  const [unmatchedGames, setUnmatchedGames] = useState<any[]>([]);
+  const [showUnmatchedDetails, setShowUnmatchedDetails] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const analyzer = useMemo(() => new PreLiveMultipleAnalyzer(), []);
@@ -84,6 +86,9 @@ export default function MultipleAnalyzerPage() {
       // Show unmatched games warning
       if (oddsData.unmatched?.length > 0) {
         console.warn(`[ODDS] Games without odds:`, oddsData.unmatched.map((u: any) => `${u.home} x ${u.away}`));
+        setUnmatchedGames(oddsData.unmatched);
+      } else {
+        setUnmatchedGames([]);
       }
       
       if ((result.suggestions ?? []).length === 0) {
@@ -205,6 +210,50 @@ export default function MultipleAnalyzerPage() {
         {error && (
           <div style={{ background: '#1a0a0a', border: `1px solid ${C.red}44`, borderRadius: 10, padding: '12px 16px', marginBottom: 24, color: C.red, fontSize: 13 }}>
             ⚠️ {error}
+          </div>
+        )}
+
+        {/* 🆕 Unmatched games warning */}
+        {unmatchedGames.length > 0 && (
+          <div style={{ background: '#1a1a0a', border: `1px solid ${C.gold}44`, borderRadius: 10, padding: '12px 16px', marginBottom: 24 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ color: C.gold, fontSize: 13, fontWeight: 600 }}>
+                ⚠️ {unmatchedGames.length} jogo{unmatchedGames.length > 1 ? 's' : ''} sem odds
+              </span>
+              <button
+                onClick={() => setShowUnmatchedDetails(!showUnmatchedDetails)}
+                style={{
+                  background: 'transparent', color: C.gold, border: `1px solid ${C.gold}66`,
+                  borderRadius: 6, padding: '4px 12px', fontSize: 11, cursor: 'pointer'
+                }}
+              >
+                {showUnmatchedDetails ? 'Ocultar' : 'Ver detalhes'}
+              </button>
+            </div>
+            
+            {/* Summary of first few games */}
+            {!showUnmatchedDetails && unmatchedGames.length > 0 && (
+              <div style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>
+                {unmatchedGames.slice(0, 3).map((u, i) => (
+                  <span key={i}>
+                    {u.home} x {u.away}
+                    {i < Math.min(2, unmatchedGames.length - 1) && ', '}
+                  </span>
+                ))}
+                {unmatchedGames.length > 3 && ` e mais ${unmatchedGames.length - 3}`}
+              </div>
+            )}
+            
+            {/* Detailed list */}
+            {showUnmatchedDetails && (
+              <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}33` }}>
+                {unmatchedGames.map((u, i) => (
+                  <div key={i} style={{ color: C.muted, fontSize: 12, marginBottom: 4 }}>
+                    • {u.home} x {u.away} ({u.league})
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
