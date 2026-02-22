@@ -44,6 +44,7 @@ export default function AdminPage() {
   const [clearing, setClearing] = useState(false);
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
   const [isClient, setIsClient] = useState(false);
+  const [testingSave, setTestingSave] = useState(false);
 
   // 🆕 Detectar se está no cliente
   useEffect(() => {
@@ -113,6 +114,25 @@ export default function AdminPage() {
       alert("✅ Chave de API salva com sucesso!");
     }
     setShowApiKeyInput(false);
+  };
+
+  const handleTestSupabaseSave = async () => {
+    setTestingSave(true);
+    try {
+      // Importar função de teste
+      const { testSupabaseSave } = await import("../../lib/test-supabase-save");
+      const success = await testSupabaseSave();
+      
+      if (success) {
+        alert("✅ Teste de save do Supabase OK! Colunas funcionando.");
+      } else {
+        alert("❌ Teste falhou. Verifique console para detalhes.");
+      }
+    } catch (e: any) {
+      alert("❌ Erro no teste: " + (e?.message ?? String(e)));
+    } finally {
+      setTestingSave(false);
+    }
   };
 
   const stats = {
@@ -359,6 +379,40 @@ export default function AdminPage() {
               </>
             )}
           </div>
+        </div>
+      </div>
+
+      {/* Teste de Conexão Supabase */}
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: "12px", padding: "24px", marginBottom: "24px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "20px" }}>
+          <Database size={20} color={C.accent} />
+          <h2 style={{ fontSize: "18px", fontWeight: 600, margin: 0, color: C.text }}>
+            Teste de Conexão Supabase
+          </h2>
+        </div>
+        
+        <div style={{ marginBottom: "16px" }}>
+          <div style={{ fontSize: "14px", color: C.muted, marginBottom: "12px" }}>
+            Verificar se as colunas novas (combo_data, poison_data, favorito_data) estão funcionando para save.
+          </div>
+          
+          <button
+            onClick={handleTestSupabaseSave}
+            disabled={testingSave}
+            style={{
+              padding: "12px 24px",
+              background: testingSave ? C.gray : C.accent,
+              color: "white",
+              border: "none",
+              borderRadius: "8px",
+              cursor: testingSave ? "not-allowed" : "pointer",
+              fontSize: "14px",
+              fontWeight: 600,
+              width: "100%"
+            }}
+          >
+            {testingSave ? '🔄 Testando...' : '🧪 Testar Save Supabase'}
+          </button>
         </div>
       </div>
 
