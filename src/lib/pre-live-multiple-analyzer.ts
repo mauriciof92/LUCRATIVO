@@ -15,8 +15,8 @@ const TIER_CONFIG: Record<string, { nGames: number; marketsPerGame: number; stak
   bingo:     { nGames: 5, marketsPerGame: 2, stake: 10, minTotal: 5.0,  maxTotal: 150.0 },
 };
 // Qualidade mínima por jogo (gate de entrada)
-const MIN_SCORE = 0.65;  // Score ≥ 65%
-const MIN_CONF  = 0.55;  // Confiança ≥ 55%
+const MIN_SCORE = 0.55;  // Score ≥ 55%
+const MIN_CONF  = 0.45;  // Confiança ≥ 45%
 
 export interface LiveMultipleSuggestion {
   id: string;
