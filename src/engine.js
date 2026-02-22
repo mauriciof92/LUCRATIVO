@@ -840,7 +840,7 @@ export function suggestMainMarket(g) {
       if (fav.chFavGol >= 7) return { label: `${fav.lado} ${fav.nome} — Finalizações HT Over ${manteiga ? '6.5' : '5.5'}`, axis: "chutes_ht", icon: manteiga ? "🚀" : "🎯", color: "#ffd600" };
       if (fav.chFavGol >= 6) return { label: `${fav.lado} ${fav.nome} — Finalizações HT Over ${manteiga ? '5.5' : '4.5'}`, axis: "chutes_ht", icon: manteiga ? "🚀" : "🎯", color: "#ffd600" };
       if (fav.chFavGol >= 5) return { label: `${fav.lado} ${fav.nome} — Finalizações HT Over ${manteiga ? '4.5' : '3.5'}`, axis: "chutes_ht", icon: manteiga ? "🚀" : "🎯", color: "#ffd600" };
-      return { label: "Over 1.5 FT", axis: "gols", icon: "⚽", color: "#00e676" }; // buffer insuficiente
+      return null; // buffer insuficiente
     }
 
     case "high_offense_balanced":
@@ -857,20 +857,20 @@ export function suggestMainMarket(g) {
     case "corner_dominant": {
       // Buffer extremo v1.2: exC >= 12.0 + cvCantos <= 40 (consistência de elite)
       if (g.exC >= 12.0 && (g.cvCantos || 0) <= 40) return { label: "Over 8.5 Cantos FT", axis: "cantos", icon: "🚩", color: "#00c2ff" };
-      return { label: "Over 1.5 FT", axis: "gols", icon: "⚽", color: "#00e676" };
+      return null;
     }
     
     case "corner_heavy": {
       const cantHFav = fav.cantFavHT;
       // Condição especial: afFav > 80 permite cantFavHT >= 3.8 [EMENDA v1.3]
-      const thresholdCantos = (fav.afFav > 80) ? 3.8 : 4.5;
+      const thresholdCantos = (fav.afFav > 80) ? 3.8 : 3.5;
       const cvCantosLimit = 65; // Flexibilização para perfis de cantos
       
       if (cantHFav >= thresholdCantos && (g.cvCantosHT || 0) <= cvCantosLimit)
         return { label: `${fav.lado} ${fav.nome} — Over 3.5 Cantos HT`, axis: "cantos_ht", icon: "🚩", color: "#00c2ff" };
       if (g.exC >= 12.0 && (g.cvCantos || 0) <= 40)
         return { label: "Over 8.5 Cantos FT", axis: "cantos", icon: "🚩", color: "#00c2ff" };
-      return { label: "Over 1.5 FT", axis: "gols", icon: "⚽", color: "#00e676" };
+      return null;
     }
     case "balanced_btts":
       return { label: "Ambas Marcam — Sim", axis: "btts", icon: "💜", color: "#d500f9" };
@@ -884,7 +884,7 @@ export function suggestMainMarket(g) {
     default:
       if (g.exG >= 3.5)                              return { label: "Over 2.5 FT",       axis: "gols",   icon: "⚽", color: "#00e676"  };
       if (g.exC >= 12.0 && g.cvCantos <= 40)        return { label: "Over 8.5 Cantos FT", axis: "cantos", icon: "🚩", color: "#00c2ff" };
-      return                                                { label: "Over 1.5 FT",         axis: "gols",   icon: "⚽", color: "#6f8aa6"  };
+      return null;
   }
 }
 
@@ -921,7 +921,7 @@ export function suggestCombo(g) {
   if (profile === "corner_dominant" || profile === "corner_heavy") {
     // Cantos como primeira sugestão para perfis de cantos
     const cantHFav = fav.cantFavHT;
-    const thresholdCantos = (fav.afFav > 80) ? 3.8 : 4.5;
+    const thresholdCantos = (fav.afFav > 80) ? 3.8 : 3.5;
     const cvCantosLimit = 65; // Flexibilização para perfis de cantos
     
     if (cantHFav >= thresholdCantos && (g.cvCantosHT || 0) <= cvCantosLimit) {
@@ -1018,7 +1018,7 @@ export function suggestCombo(g) {
   const cant37Threshold = isCornerProfile ? 0.20 : 0.20;
   const cvCantosThreshold = isCornerProfile ? 65 : 55;
   
-  const thresholdCantos = (fav.afFav > 80) ? 3.8 : 4.5;
+  const thresholdCantos = (fav.afFav > 80) ? 3.8 : 3.5;
   if (main.axis !== "cantos_ht" && main.axis !== "cantos" && fav.cantFavHT >= thresholdCantos && favAppg >= appgThreshold && favCant37 >= cant37Threshold && (g.cvCantosHT || 0) <= cvCantosThreshold) {
     const perc4EscanteiosHT = g.percMais4EscanteiosHT || 0;
     const perc5EscanteiosHT = g.percMais5EscanteiosHT || 0;
@@ -1047,16 +1047,16 @@ export function suggestCombo(g) {
   const percOver25 = g.percMais25Gols || 0;
   const mediaGolsMarcados = g.mediaGolsMarcados || 0;
   
-  if (g.exG >= 4 && !["gols", "gols_btts", "fav_gols", "golsHT_fav"].includes(main.axis)) {
-    if (percOver25 >= 70) {
+  if (g.exG >= 3.5 && !["gols", "gols_btts", "fav_gols", "golsHT_fav"].includes(main.axis)) {
+    if (percOver25 >= 65) {
       cands.push({ label: `Over 2.5 FT (${percOver25.toFixed(0)}%)`, axis: "gols", icon: "⚽" });
     } else {
       cands.push({ label: "Over 2.5 FT", axis: "gols", icon: "⚽" });
     }
   }
   
-  if (g.exG >= 3 && !["gols", "gols_btts", "fav_gols", "golsHT_fav"].includes(main.axis)) {
-    if (mediaGolsMarcados >= 2.8) {
+  if (g.exG >= 2.5 && !["gols", "gols_btts", "fav_gols", "golsHT_fav"].includes(main.axis)) {
+    if (mediaGolsMarcados >= 2.5) {
       cands.push({ label: `Over 1.5 FT (${mediaGolsMarcados.toFixed(1)} média)`, axis: "gols", icon: "⚽" });
     } else {
       cands.push({ label: "Over 1.5 FT", axis: "gols", icon: "⚽" });
@@ -1068,8 +1068,8 @@ export function suggestCombo(g) {
     cands.push({ label: "Under 2.5 FT", axis: "under", icon: "🔒" });
 
   // BTTS - 🆕 Melhorado com estatísticas detalhadas
-  const bttsTierA = fav.afUnder >= 45 && g.exG >= 3.5 && g.cv <= 40;
-  const bttsTierB = fav.afUnder >= 42 && g.exG >= 3.2 && g.cv <= 45 && fav.afDiff <= 20;
+  const bttsTierA = fav.afUnder >= 40 && g.exG >= 3.0 && g.cv <= 45;
+  const bttsTierB = fav.afUnder >= 35 && g.exG >= 2.8 && g.cv <= 50 && fav.afDiff <= 25;
   
   // 🆕 Usar estatísticas de BTTS e gols sofridos
   const btsPercent = g.btsPercent || 0;
@@ -1077,7 +1077,7 @@ export function suggestCombo(g) {
   const golsSofridosHT = g.golsHTSofridos || 0;
   
   // Verificar se ambos times têm probabilidade de marcar
-  const ambosMarcamProb = btsPercent >= 55 && golsSofridos >= 1.2 && golsSofridosHT >= 0.5;
+  const ambosMarcamProb = btsPercent >= 50 && golsSofridos >= 1.0 && golsSofridosHT >= 0.3;
   
   if ((bttsTierA || bttsTierB || ambosMarcamProb) && !["btts", "gols_btts"].includes(main.axis)) {
     if (btsPercent >= 65) {
