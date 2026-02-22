@@ -979,8 +979,8 @@ export function suggestCombo(g) {
   if (allowsHTFinalizations && allowsHTByElite && main.axis !== "chutes_ht" && fav.chFavTot >= 9)
     cands.push({ label: `${fav.lado} ${fav.nome} — Finalizações HT Over 6.5`, axis: "chutes_ht", icon: "🎯" });
 
-  // Cantos FT — buffer extremo v1.2: APPG >= 0.90 + exC >= 12.0 + cvCantos <= 40 (elite)
-  if (main.axis !== "cantos" && main.axis !== "cantos_ht" && g.exC >= 12.0 && g.cvCantos <= 40 && favAppg >= 0.90) {
+  // Cantos FT — buffer extremo v1.2: APPG >= 0.70 + exC >= 9.0 + cvCantos <= 55 (relaxado)
+  if (main.axis !== "cantos" && main.axis !== "cantos_ht" && g.exC >= 9.0 && g.cvCantos <= 55 && favAppg >= 0.70) {
     // Usar estatísticas de cantos por período para decisão mais inteligente
     const cantos0a10 = g.mediaEscanteios0a10 || 0;
     const cantos11a20 = g.mediaEscanteios11a20 || 0;
@@ -997,14 +997,14 @@ export function suggestCombo(g) {
     }
   }
 
-  // Cantos HT — APPG >= 0.60 + Cant37 >= 0.20 (Flexibilização de Captação) + Buffer +1 + cvCantosHT <= 65
+  // Cantos HT — APPG >= 0.55 + Cant37 >= 0.20 (Flexibilização de Captação) + Buffer +1 + cvCantosHT <= 70
   // Flexibilização exclusiva para perfis de cantos
   const isCornerProfile = profile === "corner_dominant" || profile === "corner_heavy";
-  const appgThreshold = isCornerProfile ? 0.60 : 0.65;
+  const appgThreshold = isCornerProfile ? 0.55 : 0.60;
   const cant37Threshold = isCornerProfile ? 0.20 : 0.20;
-  const cvCantosThreshold = isCornerProfile ? 65 : 55;
+  const cvCantosThreshold = isCornerProfile ? 70 : 65;
   
-  const thresholdCantos = (fav.afFav > 80) ? 3.8 : 4.5;
+  const thresholdCantos = (fav.afFav > 80) ? 3.5 : 4.0;
   if (main.axis !== "cantos_ht" && main.axis !== "cantos" && fav.cantFavHT >= thresholdCantos && favAppg >= appgThreshold && favCant37 >= cant37Threshold && (g.cvCantosHT || 0) <= cvCantosThreshold) {
     const perc4EscanteiosHT = g.percMais4EscanteiosHT || 0;
     const perc5EscanteiosHT = g.percMais5EscanteiosHT || 0;
