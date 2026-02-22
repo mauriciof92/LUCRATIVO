@@ -318,3 +318,6 @@ dfZebra = dfA se favorito é Casa (🏠) | dfH se favorito é Fora (✈️)
 ################################################################################
 # FIM DO ESTATUTO — Versão 1.3 — Mantido por: Gestor de Risco
 ################################################################################
+
+# REGRA ESTATUTO DE ODDS
+Antes de sugerir ou realizar altera��es no src/engine.js ou nos analisadores de m�ltiplas, a IA DEVE obrigatoriamente ler o arquivo docs/engine/Estatuto_Odds_e_Filtros.md e respeitar a arquitetura de Pisos Din�micos.

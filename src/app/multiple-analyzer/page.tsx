@@ -205,107 +205,186 @@ export default function MultipleAnalyzerPage() {
         {/* BILHETES */}
         {suggestions.length > 0 && (
           <div>
-            <h2 style={{ fontSize: 16, fontWeight: 600, margin: '0 0 16px' }}>� Bilhetes Gerados</h2>
-            <div style={{ display: 'grid', gap: 16 }}>
-              {suggestions.map((s, i) => {
-                const style = TICKET_STYLES[s.type] ?? TICKET_STYLES.bronze;
-                const combinedOdd = s.combinedOdd ?? s.totalOdds ?? 0;
-                const nLegs = s.selections?.length ?? 0;
-                return (
-                  <div key={s.id ?? i} style={{
-                    background: C.surface, border: `2px solid ${style.color}40`,
-                    borderRadius: 12, padding: 20, position: 'relative', overflow: 'hidden',
-                  }}>
-                    {/* Faixa de cor no topo */}
-                    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: style.color }} />
+            {/* SESSÃO: SINFONIA DE PARDAIS */}
+            {suggestions.filter(s => s.type === 'sinfonia').length > 0 && (
+              <div style={{ marginBottom: 40 }}>
+                <h2 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 16px', color: '#00e676', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  🐦 Sinfonia de Pardais (Bet Builder)
+                </h2>
+                <div style={{ display: 'grid', gap: 16 }}>
+                  {suggestions.filter(s => s.type === 'sinfonia').map((s, i) => {
+                    const style = TICKET_STYLES[s.type];
+                    const combinedOdd = s.combinedOdd ?? s.totalOdds ?? 0;
+                    const nLegs = s.selections?.length ?? 0;
+                    return (
+                      <div key={s.id ?? `sinfonia-${i}`} style={{
+                        background: C.surface, border: `2px solid ${style.color}40`,
+                        borderRadius: 12, padding: 20, position: 'relative', overflow: 'hidden',
+                      }}>
+                        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: style.color }} />
 
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
-                      <div>
-                        <div style={{ fontSize: 15, fontWeight: 700, color: style.color, marginBottom: 2 }}>
-                          {style.icon} {style.label}
-                        </div>
-                        <div style={{ color: C.muted, fontSize: 12 }}>
-                          {new Set(s.selections?.map((sel: any) => sel.match)).size} jogos · {nLegs} mercados · Stake R$ {s.suggestedStake?.toFixed(2) ?? '25.00'}
-                        </div>
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontSize: 22, fontWeight: 700, color: style.color }}>
-                          {combinedOdd > 0 ? combinedOdd.toFixed(2) : '—'}
-                        </div>
-                        <div style={{ color: C.muted, fontSize: 11 }}>
-                          Retorno R$ {s.expectedReturn ? s.expectedReturn.toFixed(2) : '—'}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                      {/* Agrupar por jogo para exibir no formato Bet Builder */}
-                      {Object.entries(
-                        s.selections?.reduce((acc: any, sel: any) => {
-                          if (!acc[sel.match]) acc[sel.match] = [];
-                          acc[sel.match].push(sel);
-                          return acc;
-                        }, {}) || {}
-                      ).map(([match, sels]: [string, any], j: number) => {
-                        const gameOdd = sels.reduce((acc: number, sel: any) => acc * (sel.odd > 1 ? sel.odd : 1), 1);
-                        return (
-                          <div key={j} style={{
-                            background: C.bg, border: `1px solid ${C.border}`,
-                            borderRadius: 8, padding: '12px',
-                          }}>
-                            {/* Cabeçalho do Jogo */}
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${C.border}` }}>
-                              <div>
-                                <div style={{ fontSize: 14, fontWeight: 700 }}>Criar Aposta</div>
-                                <div style={{ color: C.muted, fontSize: 12 }}>{match}</div>
-                              </div>
-                              <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>
-                                {gameOdd > 1 ? gameOdd.toFixed(2) : '—'}
-                              </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+                          <div>
+                            <div style={{ fontSize: 15, fontWeight: 700, color: style.color, marginBottom: 2 }}>
+                              {style.icon} {style.label}
                             </div>
-
-                            {/* Seleções do Jogo */}
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, position: 'relative' }}>
-                              {/* Linha vertical conectando os dots */}
-                              <div style={{ position: 'absolute', left: 5, top: 10, bottom: 10, width: 2, background: C.border, zIndex: 0 }} />
-                              
-                              {sels.map((sel: any, k: number) => (
-                                <div key={k} style={{ display: 'flex', alignItems: 'flex-start', position: 'relative', zIndex: 1 }}>
-                                  {/* Dot */}
-                                  <div style={{ 
-                                    width: 12, height: 12, borderRadius: '50%', 
-                                    background: C.bg, border: `2px solid ${C.muted}`,
-                                    marginRight: 10, marginTop: 4, flexShrink: 0 
-                                  }} />
-                                  <div style={{ flex: 1 }}>
-                                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
-                                      {sel.market}
-                                    </div>
-                                    <div style={{ color: C.muted, fontSize: 11 }}>
-                                      {sel.reason?.split('·')[0]?.trim() || sel.gameProfile}
-                                    </div>
-                                  </div>
-                                </div>
-                              ))}
+                            <div style={{ color: C.muted, fontSize: 12 }}>
+                              {new Set(s.selections?.map((sel: any) => sel.match)).size} jogos · {nLegs} mercados · Stake R$ {s.suggestedStake?.toFixed(2) ?? '25.00'}
                             </div>
                           </div>
-                        );
-                      })}
-                    </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: 22, fontWeight: 700, color: style.color }}>
+                              {combinedOdd > 0 ? combinedOdd.toFixed(2) : '—'}
+                            </div>
+                            <div style={{ color: C.muted, fontSize: 11 }}>
+                              Retorno R$ {s.expectedReturn ? s.expectedReturn.toFixed(2) : '—'}
+                            </div>
+                          </div>
+                        </div>
 
-                    {/* Risco / Valor */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
-                      <span style={{ fontSize: 12, color: C.muted }}>
-                        Risco: <strong style={{ color: s.riskLevel === 'low' ? C.green : s.riskLevel === 'high' ? C.red : C.gold }}>{s.riskLevel === 'low' ? 'Baixo' : s.riskLevel === 'high' ? 'Alto' : 'Médio'}</strong>
-                      </span>
-                      <span style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>
-                        {s.riskReward ?? ''}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                          {Object.entries(
+                            s.selections?.reduce((acc: any, sel: any) => {
+                              if (!acc[sel.match]) acc[sel.match] = [];
+                              acc[sel.match].push(sel);
+                              return acc;
+                            }, {}) || {}
+                          ).map(([match, sels]: [string, any], j: number) => {
+                            const gameOdd = sels.reduce((acc: number, sel: any) => acc * (sel.odd > 1 ? sel.odd : 1), 1);
+                            return (
+                              <div key={j} style={{
+                                background: C.bg, border: `1px solid ${C.border}`,
+                                borderRadius: 8, padding: '12px',
+                              }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${C.border}` }}>
+                                  <div>
+                                    <div style={{ fontSize: 14, fontWeight: 700 }}>Criar Aposta</div>
+                                    <div style={{ color: C.muted, fontSize: 12 }}>{match}</div>
+                                  </div>
+                                  <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>
+                                    {gameOdd > 1 ? gameOdd.toFixed(2) : '—'}
+                                  </div>
+                                </div>
+
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, position: 'relative' }}>
+                                  <div style={{ position: 'absolute', left: 5, top: 10, bottom: 10, width: 2, background: C.border, zIndex: 0 }} />
+                                  
+                                  {sels.map((sel: any, k: number) => (
+                                    <div key={k} style={{ display: 'flex', alignItems: 'flex-start', position: 'relative', zIndex: 1 }}>
+                                      <div style={{ 
+                                        width: 12, height: 12, borderRadius: '50%', 
+                                        background: C.bg, border: `2px solid ${C.muted}`,
+                                        marginRight: 10, marginTop: 4, flexShrink: 0 
+                                      }} />
+                                      <div style={{ flex: 1 }}>
+                                        <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
+                                          {sel.market}
+                                        </div>
+                                        <div style={{ color: C.muted, fontSize: 11 }}>
+                                          {sel.reason?.split('·')[0]?.trim() || sel.gameProfile}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
+                          <span style={{ fontSize: 12, color: C.muted }}>
+                            Risco: <strong style={{ color: s.riskLevel === 'low' ? C.green : s.riskLevel === 'high' ? C.red : C.gold }}>{s.riskLevel === 'low' ? 'Baixo' : s.riskLevel === 'high' ? 'Alto' : 'Médio'}</strong>
+                          </span>
+                          <span style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>
+                            {s.riskReward ?? ''}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* SESSÃO: MÚLTIPLAS TRADICIONAIS */}
+            {suggestions.filter(s => s.type !== 'sinfonia').length > 0 && (
+              <div>
+                <h2 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 16px', color: C.text }}>
+                  🎯 Múltiplas Inteligentes
+                </h2>
+                <div style={{ display: 'grid', gap: 16 }}>
+                  {suggestions.filter(s => s.type !== 'sinfonia').map((s, i) => {
+                    const style = TICKET_STYLES[s.type] ?? TICKET_STYLES.bronze;
+                    const combinedOdd = s.combinedOdd ?? s.totalOdds ?? 0;
+                    const nLegs = s.selections?.length ?? 0;
+                    return (
+                      <div key={s.id ?? `trad-${i}`} style={{
+                        background: C.surface, border: `1px solid ${style.color}40`,
+                        borderRadius: 12, padding: 20, position: 'relative', overflow: 'hidden',
+                      }}>
+                        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: style.color }} />
+
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+                          <div>
+                            <div style={{ fontSize: 15, fontWeight: 700, color: style.color, marginBottom: 2 }}>
+                              {style.icon} {style.label}
+                            </div>
+                            <div style={{ color: C.muted, fontSize: 12 }}>
+                              {new Set(s.selections?.map((sel: any) => sel.match)).size} jogos · {nLegs} mercados · Stake R$ {s.suggestedStake?.toFixed(2) ?? '25.00'}
+                            </div>
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: 22, fontWeight: 700, color: style.color }}>
+                              {combinedOdd > 0 ? combinedOdd.toFixed(2) : '—'}
+                            </div>
+                            <div style={{ color: C.muted, fontSize: 11 }}>
+                              Retorno R$ {s.expectedReturn ? s.expectedReturn.toFixed(2) : '—'}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          {s.selections?.map((sel: any, j: number) => (
+                            <div key={j} style={{
+                              background: C.bg, border: `1px solid ${C.border}`,
+                              borderRadius: 8, padding: '10px 14px',
+                              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                            }}>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {sel.match}
+                                </div>
+                                <div style={{ color: C.muted, fontSize: 11 }}>
+                                  {sel.market} · {sel.league ?? ''}
+                                </div>
+                              </div>
+                              <div style={{ textAlign: 'right', marginLeft: 12 }}>
+                                <div style={{ fontSize: 15, fontWeight: 700, color: sel.odd > 1 ? C.text : C.muted }}>
+                                  {sel.odd > 1 ? Number(sel.odd).toFixed(2) : 'sem odd'}
+                                </div>
+                                {sel.gameProfile && (
+                                  <span style={{ fontSize: 10, color: C.muted }}>{sel.gameProfile}</span>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
+                          <span style={{ fontSize: 11, color: C.muted }}>
+                            Risco: <strong style={{ color: s.riskLevel === 'low' ? C.green : s.riskLevel === 'high' ? C.red : C.gold }}>{s.riskLevel === 'low' ? 'Baixo' : s.riskLevel === 'high' ? 'Alto' : 'Médio'}</strong>
+                          </span>
+                          <span style={{ fontSize: 11, color: C.muted }}>
+                            {s.riskReward ?? ''}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

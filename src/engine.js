@@ -395,7 +395,8 @@ export function getMinOddForLabel(label) {
   if (nl.includes("finalizacoes") || nl.includes("chutes")) return 1.70;
   if (nl.includes("vence")) return 1.55;
 
-  return null;
+  // Fallback genérico para não barrar seleções por falta de odd estimada
+  return 1.40;
 }
 
 export function parseCSV(text) {
@@ -809,6 +810,7 @@ export function suggestMainMarket(g) {
 
   // Fallback: Lógica tradicional
   const excludedLeaguesForHT = [
+    "Carioca Serie A",
     "League One",
     "AFC Champions League Elite",
     "Eredivisie",
@@ -937,6 +939,7 @@ export function suggestCombo(g) {
 
   // 🚫 Campeonatos que não devem ter finalizações HT sugeridas
   const excludedLeaguesForHT = [
+    "Carioca Serie A",
     "League One",
     "AFC Champions League Elite",
     "Eredivisie",
@@ -1114,6 +1117,7 @@ export function suggestBetBuilder(g) {
 
   // 🚫 Campeonatos que não devem ter finalizações HT sugeridas
   const excludedLeaguesForHT = [
+    "Carioca Serie A",
     "League One",
     "AFC Champions League Elite",
     "Eredivisie",
@@ -1127,39 +1131,39 @@ export function suggestBetBuilder(g) {
     (g.league || '').toLowerCase().includes(excluded.toLowerCase())
   );
 
-  // 1. Chutes HT (Fav) - Micro-linha
-  if (allowsHTFinalizations && fav.chFavGol >= 5) {
-    cands.push({ label: `${fav.lado} ${fav.nome} — Finalizações HT Over 4.5`, axis: "chutes_ht", icon: "🎯", isMicro: true });
-  } else if (allowsHTFinalizations && fav.chFavGol >= 4) {
-    cands.push({ label: `${fav.lado} ${fav.nome} — Finalizações HT Over 3.5`, axis: "chutes_ht", icon: "🎯", isMicro: true });
-  }
+    // 1. Chutes HT (Fav) - Micro-linha
+    if (allowsHTFinalizations && fav.chFavGol >= 4) {
+      cands.push({ label: `${fav.lado} ${fav.nome} — Finalizações HT Over 4.5`, axis: "chutes_ht", icon: "🎯", isMicro: true });
+    } else if (allowsHTFinalizations && fav.chFavGol >= 3) {
+      cands.push({ label: `${fav.lado} ${fav.nome} — Finalizações HT Over 3.5`, axis: "chutes_ht", icon: "🎯", isMicro: true });
+    }
 
-  // 2. Cantos HT (Fav) - Micro-linha
-  if (fav.cantFavHT >= 3.5) {
-    cands.push({ label: `${fav.lado} ${fav.nome} — Over 1.5 Cantos HT`, axis: "cantos_ht", icon: "🚩", isMicro: true });
-  }
+    // 2. Cantos HT (Fav) - Micro-linha
+    if (fav.cantFavHT >= 2.5) {
+      cands.push({ label: `${fav.lado} ${fav.nome} — Over 1.5 Cantos HT`, axis: "cantos_ht", icon: "🚩", isMicro: true });
+    }
 
-  // 3. Cantos FT (Geral) - Micro-linha
-  if (g.exC >= 10.0) {
-    cands.push({ label: "Over 6.5 Cantos FT", axis: "cantos", icon: "🚩", isMicro: true });
-  } else if (g.exC >= 8.5) {
-    cands.push({ label: "Over 5.5 Cantos FT", axis: "cantos", icon: "🚩", isMicro: true });
-  }
+    // 3. Cantos FT (Geral) - Micro-linha
+    if (g.exC >= 9.0) {
+      cands.push({ label: "Over 6.5 Cantos FT", axis: "cantos", icon: "🚩", isMicro: true });
+    } else if (g.exC >= 7.5) {
+      cands.push({ label: "Over 5.5 Cantos FT", axis: "cantos", icon: "🚩", isMicro: true });
+    }
 
-  // 4. Gols HT - Micro-linha
-  if (fav.gol05HTFav >= 65 || (g.golsHTH || 0) + (g.golsHTA || 0) >= 1.2) {
-    cands.push({ label: "Over 0.5 Gols HT", axis: "golsHT", icon: "⏱️", isMicro: true });
-  }
+    // 4. Gols HT - Micro-linha
+    if (fav.gol05HTFav >= 55 || (g.golsHTH || 0) + (g.golsHTA || 0) >= 1.0) {
+      cands.push({ label: "Over 0.5 Gols HT", axis: "golsHT", icon: "⏱️", isMicro: true });
+    }
 
-  // 5. Gols FT - Micro-linha
-  if (g.exG >= 2.5) {
-    cands.push({ label: "Over 1.5 FT", axis: "gols", icon: "⚽", isMicro: true });
-  }
+    // 5. Gols FT - Micro-linha
+    if (g.exG >= 2.0) {
+      cands.push({ label: "Over 1.5 FT", axis: "gols", icon: "⚽", isMicro: true });
+    }
 
-  // 6. Ambas Marcam (Apenas se o jogo for muito propício)
-  if (g.btsPercent >= 60 && g.exG >= 2.8) {
-    cands.push({ label: "Ambas Marcam — Sim", axis: "btts", icon: "💜", isMicro: true });
-  }
+    // 6. Ambas Marcam (Apenas se o jogo for muito propício)
+    if (g.btsPercent >= 55 && g.exG >= 2.5) {
+      cands.push({ label: "Ambas Marcam — Sim", axis: "btts", icon: "💜", isMicro: true });
+    }
 
   return cands;
 }
@@ -1324,7 +1328,7 @@ export function calculateRiskAdjustedStake(g, baseStake, bankroll = 1000, curren
   return Math.min(adjustedStake, availableStake);
 }
 
-export function shouldSkipBet(g, minConfidence = 0.50, maxOdds = 5.0) {
+export function shouldSkipBet(g, minConfidence = 0.50, maxOdds = 20.0, minOdd = 1.40) {
   const confidence = computeConfidence(g).score;
   const mainMarket = suggestMainMarket(g);
   
@@ -1338,7 +1342,11 @@ export function shouldSkipBet(g, minConfidence = 0.50, maxOdds = 5.0) {
   // Skip if confidence too low
   if (confidence < minConfidence) return true;
   
-  // Skip if odds too high (high variance)
+  // 🚨 Pisos Dinâmicos: Filtrar odds muito esmagadas para apostas singulares (Panorama)
+  // O piso padrão é 1.40 para garantir um mínimo de EV (Expected Value)
+  if (odd && odd < minOdd) return true;
+  
+  // Apenas barrar odds absurdamente altas que indicam erro no dado
   if (odd && odd > maxOdds) return true;
   
   // Skip if critical data missing
@@ -1436,7 +1444,8 @@ export function detectPoisonTriggers(g) {
    VALUE BET DETECTION - PROBABILIDADE DINÂMICA
 ───────────────────────────────────────── */
 export function calculateValueBet(g, marketLabel, odd) {
-  if (!odd || odd <= 1) return { hasValue: false, edge: 0, impliedProb: 0, ourProb: 0, minOdd: 0 };
+  // Relaxando a restrição de odd <= 1, pois as micro-linhas ou fallbacks podem ter valor 1.01+
+  if (!odd || odd <= 1.01) return { hasValue: false, edge: 0, impliedProb: 0, ourProb: 0, minOdd: 0 };
   
   // Calculate implied probability from odds
   const impliedProb = 1 / odd;

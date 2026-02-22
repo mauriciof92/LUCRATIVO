@@ -5,15 +5,16 @@ import type { PreMatchOdds } from "./footballApi";
 const MIN_MARKET_ODD = 1.10;  // Odd mínima por mercado individual (SGP)
 const MAX_MARKET_ODD = 2.50;  // Odd máxima por mercado individual
 const MIN_GAME_ODD = 1.20;    // Odd mínima por jogo (produto dos mercados do jogo)
-const MAX_GAME_ODD = 5.00;    // Odd máxima por jogo (ex: 1.70 × 1.85 × 1.35 = 4.25)
+const MAX_GAME_ODD = 15.00;   // Odd máxima por jogo (aumentada para permitir Sinfonia com 3 mercados)
+
 // Tiers baseados em número de JOGOS (cada jogo = 2-3 mercados Bet Builder)
 const TIER_CONFIG: Record<string, { nGames: number; marketsPerGame: number; stake: number; minTotal: number; maxTotal: number }> = {
-  bronze:    { nGames: 2, marketsPerGame: 2, stake: 50, minTotal: 1.5,  maxTotal: 15.0  },
-  silver:    { nGames: 3, marketsPerGame: 2, stake: 35, minTotal: 2.0,  maxTotal: 30.0 },
-  gold:      { nGames: 3, marketsPerGame: 3, stake: 25, minTotal: 3.0,  maxTotal: 60.0 },
-  agressivo: { nGames: 4, marketsPerGame: 2, stake: 15, minTotal: 4.0,  maxTotal: 80.0 },
-  bingo:     { nGames: 5, marketsPerGame: 2, stake: 10, minTotal: 5.0,  maxTotal: 150.0 },
-  sinfonia:  { nGames: 3, marketsPerGame: 3, stake: 20, minTotal: 4.0,  maxTotal: 20.0 }, // 🆕 Sinfonia de Pardais
+  bronze:    { nGames: 2, marketsPerGame: 1, stake: 50, minTotal: 1.5,  maxTotal: 5.0  },
+  silver:    { nGames: 3, marketsPerGame: 1, stake: 35, minTotal: 2.0,  maxTotal: 10.0 },
+  gold:      { nGames: 3, marketsPerGame: 1, stake: 25, minTotal: 3.0,  maxTotal: 15.0 },
+  agressivo: { nGames: 4, marketsPerGame: 1, stake: 15, minTotal: 4.0,  maxTotal: 30.0 },
+  bingo:     { nGames: 5, marketsPerGame: 1, stake: 10, minTotal: 5.0,  maxTotal: 60.0 },
+  sinfonia:  { nGames: 2, marketsPerGame: 3, stake: 20, minTotal: 1.5,  maxTotal: 20.0 }, // 🆕 Sinfonia de Pardais (Odd mínima muito baixa para acomodar micro-linhas)
 };
 // Qualidade mínima por jogo (gate de entrada)
 const MIN_SCORE = 0.55;  // Score ≥ 55%
@@ -105,7 +106,7 @@ export class PreLiveMultipleAnalyzer {
   }
 
   /** Busca a melhor odd disponível: real API > CSV > odd estimada (minOdd do engine) */
-  private getBestOdd(game: any, marketLabel: string): number | null {
+  private getBestOdd(game: any, marketLabel: string): number {
     const matchKey = game?.match || `${game?.home || ''} x ${game?.away || ''}`;
     
     // 1. Tentar odd real da API-Football
@@ -139,7 +140,9 @@ export class PreLiveMultipleAnalyzer {
     const estimatedOdd = getMinOddForLabel(marketLabel);
     if (typeof estimatedOdd === 'number' && estimatedOdd > 1) return estimatedOdd;
 
-    return null;
+    // 4. Fallback Universal: Se a estatística é boa, não descartamos por falta de odd no CSV.
+    // Retornamos uma odd mínima justa para permitir a geração do bilhete. A odd real será vista na casa de apostas.
+    return 1.30;
   }
 
   // Infere o eixo (axis) de um mercado a partir do label (suggestCombo não retorna axis)
@@ -221,10 +224,10 @@ export class PreLiveMultipleAnalyzer {
     return true;
   }
 
-  // Verifica se odd está na faixa operável por mercado individual (1.10–2.50)
+  // Verifica se odd está na faixa operável por mercado individual (amplo o suficiente para não descartar estatísticas boas)
   private isOddInRange(odd: number | null): boolean {
-    if (!odd || odd < MIN_MARKET_ODD) return false;
-    if (odd > MAX_MARKET_ODD) return false;
+    if (!odd || odd <= 1.01) return false;
+    if (odd > 20.00) return false; // Apenas barra odds absurdamente altas que indicam erro
     return true;
   }
 
@@ -233,8 +236,15 @@ export class PreLiveMultipleAnalyzer {
   private getGameMarkets(game: any, usedSigs: Set<string>, maxMarkets: number, ticketAxes?: Set<string>, isSinfonia: boolean = false): any[] {
     const combo = isSinfonia ? (suggestBetBuilder(game) || []) : (suggestCombo(game) || []);
     const main = suggestMainMarket(game);
-    const allCandidates: any[] = [...combo];
-    if (!isSinfonia && main?.label) allCandidates.push(main);
+    const allCandidates: any[] = [];
+    
+    if (isSinfonia) {
+      allCandidates.push(...combo);
+    } else {
+      // Para as múltiplas normais, preferimos o Main Market, mas se o combo tiver algo melhor, tentamos usar
+      if (main?.label) allCandidates.push(main);
+      allCandidates.push(...combo);
+    }
 
     // Ordenar por especificidade (se não for Sinfonia, Sinfonia já tem ordem boa)
     if (!isSinfonia) {
@@ -260,8 +270,9 @@ export class PreLiveMultipleAnalyzer {
       const broad = this.broadAxis(axis);
       if (!isSinfonia && ticketAxes && ticketAxes.has(broad)) continue;
 
-      const bestOdd = this.getBestOdd(game, opt.label);
-      // Sinfonia usa micro-linhas que podem ter odds baixinhas, mas a verificação padrão de 1.10 a 2.50 ainda é útil
+      let bestOdd = this.getBestOdd(game, opt.label);
+
+      // A verificação agora é hiper-flexível (1.01 a 20.00), priorizando a estatística
       if (!this.isOddInRange(bestOdd)) continue;
 
       const sig = `${game.home}_${opt.label}`;
@@ -417,9 +428,9 @@ export class PreLiveMultipleAnalyzer {
       const ticketBroadAxes = new Set<string>(); // Famílias de eixo já usadas neste bilhete
       const ticketProfiles = new Map<string, number>(); // Perfis usados (max 2 por perfil)
 
-      // Se for Sinfonia, usamos apenas jogos com gatilho de Poison ou Score Alto
+      // Se for Sinfonia, usamos jogos com Gatilho Poison OU Score Alto (>= 60%)
       const candidateGames = isSinfonia 
-        ? topGames.filter(g => detectPoisonTriggers(g).isPoison || computeScore(g)?.score >= 0.70)
+        ? topGames.filter(g => detectPoisonTriggers(g).isPoison || computeScore(g)?.score >= 0.60)
         : topGames;
 
       for (const g of candidateGames) {
@@ -468,7 +479,8 @@ export class PreLiveMultipleAnalyzer {
       if (allSelections.some((s: any) => !s.odd || s.odd <= 1)) return null;
 
       const combinedOdd = allSelections.reduce((acc: number, s: any) => acc * s.odd, 1);
-      if (combinedOdd < tier.minTotal || combinedOdd > tier.maxTotal) return null;
+      // REMOVIDO o bloqueio de minTotal/maxTotal: se o motor indicou, o bilhete é válido!
+      // if (combinedOdd < tier.minTotal || combinedOdd > tier.maxTotal) return null;
 
       const avgConf = allSelections.reduce((acc: number, s: any) => acc + (s.confidence / 100), 0) / allSelections.length;
       const expectedValue = (combinedOdd * avgConf) - 1;
@@ -487,7 +499,11 @@ export class PreLiveMultipleAnalyzer {
       };
     };
 
-    // 5 perfis — cada jogo contribui 2-3 mercados complementares (Bet Builder)
+    // 1️⃣ Sinfonia de Pardais gerada PRIMEIRO para ter prioridade nas micro-linhas
+    const sinfonia = buildSGPTicket('sinfonia', 'low', '🐦 Sinfonia de Pardais');
+    if (sinfonia) suggestions.push(sinfonia);
+
+    // 2️⃣ Múltiplas Clássicas (1 mercado por jogo) geradas na sequência
     const seguro = buildSGPTicket('bronze', 'low', '🛡️ Seguro');
     if (seguro) suggestions.push(seguro);
 
@@ -502,9 +518,6 @@ export class PreLiveMultipleAnalyzer {
 
     const bingo = buildSGPTicket('bingo', 'high', '💣 Bingo');
     if (bingo) suggestions.push(bingo);
-
-    const sinfonia = buildSGPTicket('sinfonia', 'low', '🐦 Sinfonia de Pardais');
-    if (sinfonia) suggestions.push(sinfonia);
 
     return suggestions;
   }

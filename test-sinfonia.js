@@ -1,0 +1,1 @@
+﻿const fs = require('fs'); const { PreLiveMultipleAnalyzer } = require('./.next/server/app/multiple-analyzer/page.js') || require('./.next/server/chunks/858.js') || {}; console.log('Try to run via ts-node instead...');
