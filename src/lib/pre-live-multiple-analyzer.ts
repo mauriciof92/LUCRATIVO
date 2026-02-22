@@ -158,11 +158,10 @@ export class PreLiveMultipleAnalyzer {
   }
 
   // Agrupa eixos finos em famílias para diversidade ENTRE jogos no bilhete
-  // cantos + cantos_ht → "cantos", gols + golsHT + fav_gols → "gols", etc.
+  // REMOVIDO: cantos + cantos_ht → agora são tratados como eixos separados
   private broadAxis(fineAxis: string): string {
-    if (fineAxis === 'cantos' || fineAxis === 'cantos_ht') return 'cantos';
     if (fineAxis === 'gols' || fineAxis === 'golsHT' || fineAxis === 'fav_gols') return 'gols';
-    return fineAxis; // chutes_ht, btts, fav, under, other → já são únicos
+    return fineAxis; // cantos, cantos_ht, chutes_ht, btts, fav, under, other → todos únicos
   }
 
   // Pontua especificidade de um mercado: HT por time > HT total > FT específico > FT genérico
@@ -171,11 +170,11 @@ export class PreLiveMultipleAnalyzer {
     // Finalizações HT por time (ex: "Arsenal — Finalizações HT Over 5.5")
     if ((l.includes('finaliz') || l.includes('chute')) && l.includes('ht')) return 100;
     // Cantos HT por time (ex: "Arsenal — Over 3.5 Cantos HT")
-    if ((l.includes('canto') || l.includes('escanteio')) && l.includes('ht')) return 90;
+    if ((l.includes('canto') || l.includes('escanteio')) && l.includes('ht')) return 95;
     // Blitz HT
-    if (l.includes('blitz')) return 95;
+    if (l.includes('blitz')) return 100;
     // Cantos FT (ex: "Over 8.5 Cantos FT")
-    if (l.includes('canto') || l.includes('escanteio')) return 70;
+    if (l.includes('canto') || l.includes('escanteio')) return 85;
     // Gols HT com time (ex: "Vence + Over 0.5 HT")
     if (l.includes('ht') && l.includes('vence')) return 60;
     // Over 2.5 FT / BTTS
