@@ -1,4 +1,4 @@
-import { parseCSV, getOddForLabel, classifyProfile, getFavorito, computeConfidence, computeScore, calculateValueBet, getMinOddForLabel, suggestMainMarket, suggestCombo, detectPoisonTriggers } from "../engine";
+import { parseCSV, getOddForLabel, classifyProfile, getFavorito, computeConfidence, computeScore, calculateValueBet, getMinOddForLabel, suggestMainMarket, suggestCombo, detectPoisonTriggers, suggestBetBuilder } from "../engine";
 import type { PreMatchOdds } from "./footballApi";
 
 // ── CONSTANTES DE QUALIDADE ──────────────────────────────────────────────────
@@ -13,6 +13,7 @@ const TIER_CONFIG: Record<string, { nGames: number; marketsPerGame: number; stak
   gold:      { nGames: 3, marketsPerGame: 3, stake: 25, minTotal: 3.0,  maxTotal: 60.0 },
   agressivo: { nGames: 4, marketsPerGame: 2, stake: 15, minTotal: 4.0,  maxTotal: 80.0 },
   bingo:     { nGames: 5, marketsPerGame: 2, stake: 10, minTotal: 5.0,  maxTotal: 150.0 },
+  sinfonia:  { nGames: 3, marketsPerGame: 3, stake: 20, minTotal: 4.0,  maxTotal: 20.0 }, // 🆕 Sinfonia de Pardais
 };
 // Qualidade mínima por jogo (gate de entrada)
 const MIN_SCORE = 0.55;  // Score ≥ 55%
@@ -20,7 +21,7 @@ const MIN_CONF  = 0.45;  // Confiança ≥ 45%
 
 export interface LiveMultipleSuggestion {
   id: string;
-  type: "bronze" | "silver" | "gold";
+  type: "bronze" | "silver" | "gold" | "agressivo" | "bingo" | "sinfonia";
   confidence: number;
   expectedValue: number;
   riskLevel: "low" | "medium" | "high";
@@ -229,16 +230,18 @@ export class PreLiveMultipleAnalyzer {
 
   // 🎯 Extrai MÚLTIPLOS mercados complementares de eixos diferentes para um jogo (Bet Builder)
   // ticketAxes: eixos já usados por outros jogos no bilhete — penaliza repetição
-  private getGameMarkets(game: any, usedSigs: Set<string>, maxMarkets: number, ticketAxes?: Set<string>): any[] {
-    const combo = suggestCombo(game) || [];
+  private getGameMarkets(game: any, usedSigs: Set<string>, maxMarkets: number, ticketAxes?: Set<string>, isSinfonia: boolean = false): any[] {
+    const combo = isSinfonia ? (suggestBetBuilder(game) || []) : (suggestCombo(game) || []);
     const main = suggestMainMarket(game);
     const allCandidates: any[] = [...combo];
-    if (main?.label) allCandidates.push(main);
+    if (!isSinfonia && main?.label) allCandidates.push(main);
 
-    // Ordenar por especificidade
-    allCandidates.sort((a: any, b: any) =>
-      this.marketSpecificity(b.label) - this.marketSpecificity(a.label)
-    );
+    // Ordenar por especificidade (se não for Sinfonia, Sinfonia já tem ordem boa)
+    if (!isSinfonia) {
+      allCandidates.sort((a: any, b: any) =>
+        this.marketSpecificity(b.label) - this.marketSpecificity(a.label)
+      );
+    }
 
     const selected: any[] = [];
     const usedAxes = new Set<string>(); // Não repetir mesmo eixo no mesmo jogo
@@ -252,12 +255,13 @@ export class PreLiveMultipleAnalyzer {
       const axis = this.inferAxis(opt.label);
       if (usedAxes.has(axis)) continue;
 
-      // BLOQUEIO FORTE: se a família do eixo já está no bilhete, pular
-      // (ex: se jogo 1 já tem cantos, jogo 2 NÃO pode ter cantos_ht)
+      // BLOQUEIO FORTE: se a família do eixo já está no bilhete, pular (Apenas se não for Sinfonia)
+      // Sinfonia permite repetição de eixos no bilhete (ex: vários jogos com cantos HT)
       const broad = this.broadAxis(axis);
-      if (ticketAxes && ticketAxes.has(broad)) continue;
+      if (!isSinfonia && ticketAxes && ticketAxes.has(broad)) continue;
 
       const bestOdd = this.getBestOdd(game, opt.label);
+      // Sinfonia usa micro-linhas que podem ter odds baixinhas, mas a verificação padrão de 1.10 a 2.50 ainda é útil
       if (!this.isOddInRange(bestOdd)) continue;
 
       const sig = `${game.home}_${opt.label}`;
@@ -403,6 +407,7 @@ export class PreLiveMultipleAnalyzer {
       riskLevel: LiveMultipleSuggestion['riskLevel'],
       reason: string
     ): LiveMultipleSuggestion | null => {
+      const isSinfonia = typeId === 'sinfonia';
       const tier = TIER_CONFIG[typeId];
       if (!tier) return null;
 
@@ -412,18 +417,27 @@ export class PreLiveMultipleAnalyzer {
       const ticketBroadAxes = new Set<string>(); // Famílias de eixo já usadas neste bilhete
       const ticketProfiles = new Map<string, number>(); // Perfis usados (max 2 por perfil)
 
-      for (const g of topGames) {
+      // Se for Sinfonia, usamos apenas jogos com gatilho de Poison ou Score Alto
+      const candidateGames = isSinfonia 
+        ? topGames.filter(g => detectPoisonTriggers(g).isPoison || computeScore(g)?.score >= 0.70)
+        : topGames;
+
+      for (const g of candidateGames) {
         if (gamesUsed >= tier.nGames) break;
 
         // Cap de perfil: max 2 jogos do mesmo perfil por bilhete
         const profile = classifyProfile(g);
-        if ((ticketProfiles.get(profile) || 0) >= 2) {
+        if ((ticketProfiles.get(profile) || 0) >= 2 && !isSinfonia) {
           console.log(`[SGP-${typeId}] ${g.match}: perfil ${profile} já tem 2 jogos — pulando`);
           continue;
         }
 
-        // Extrai mercados, BLOQUEANDO famílias de eixo já presentes no bilhete
-        const markets = this.getGameMarkets(g, globalUsedSigs, tier.marketsPerGame, ticketBroadAxes);
+        // Extrai mercados, BLOQUEANDO famílias de eixo já presentes no bilhete (Sinfonia ignora bloqueio cross-jogo)
+        const markets = this.getGameMarkets(g, globalUsedSigs, tier.marketsPerGame, ticketBroadAxes, isSinfonia);
+        if (markets.length < 2 && isSinfonia) {
+          console.log(`[SGP-${typeId}] ${g.match}: Sinfonia exige pelo menos 2 mercados por jogo — pulando`);
+          continue;
+        }
         if (markets.length === 0) {
           console.log(`[SGP-${typeId}] ${g.match}: 0 mercados fora dos eixos já no bilhete — pulando`);
           continue;
@@ -488,6 +502,9 @@ export class PreLiveMultipleAnalyzer {
 
     const bingo = buildSGPTicket('bingo', 'high', '💣 Bingo');
     if (bingo) suggestions.push(bingo);
+
+    const sinfonia = buildSGPTicket('sinfonia', 'low', '🐦 Sinfonia de Pardais');
+    if (sinfonia) suggestions.push(sinfonia);
 
     return suggestions;
   }
