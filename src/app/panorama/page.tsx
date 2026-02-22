@@ -239,14 +239,14 @@ export default function PanoramaPage() {
 
   // Ligas e mercados únicos para os selects de filtro
   const availableLeagues = useMemo(() =>
-    Array.from(new Set((todayGames ?? []).map((g: any) =>
+    Array.from(new Set((todayGames ?? results).map((g: any) =>
       g.league).filter(Boolean))).sort()
-  , [todayGames]);
+  , [todayGames, results]);
 
   // Jogos filtrados e ordenados
   const games = useMemo(() => {
-    // Sempre usar todayGames — Panorama mostra apenas jogos do dia
-    const source = todayGames ?? [];
+    // Usar todayGames se disponível, senão fallback para results
+    const source = (todayGames && todayGames.length > 0) ? todayGames : results;
     let list = [...source];
 
     if (filterTier) list = list.filter((g: any) => {
@@ -276,7 +276,7 @@ export default function PanoramaPage() {
       sortBy === 'hora'   ? extractTime(a.hour) - extractTime(b.hour) :
       (a.league ?? '').localeCompare(b.league ?? '')
     );
-  }, [todayGames, filterTier, filterLeague, filterMarket, sortBy]);
+  }, [todayGames, results, filterTier, filterLeague, filterMarket, sortBy]);
 
   return (
     <main style={{ minHeight:'100vh', background:'#0d1117',
