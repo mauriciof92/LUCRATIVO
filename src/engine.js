@@ -132,7 +132,7 @@ function _REMOVED(headers) {
     cantHTFor:   find([
       /\bmedia\b.*\bescanteios\b.*\bmarcados\b.*1.?\s*tempo(?!.*\d+-\d+)/,
       /\bht\b.*\bmedia\b.*\bescanteios\b.*\bmarcados\b/,
-    ], 21),
+    ], 31),
 
     // Chutes marcados (no gol) HT
     shotsOnHT:   find([
