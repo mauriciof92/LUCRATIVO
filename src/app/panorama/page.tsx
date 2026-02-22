@@ -239,14 +239,14 @@ export default function PanoramaPage() {
 
   // Ligas e mercados únicos para os selects de filtro
   const availableLeagues = useMemo(() =>
-    Array.from(new Set((todayGames ?? results).map((g: any) =>
+    Array.from(new Set((todayGames ?? []).map((g: any) =>
       g.league).filter(Boolean))).sort()
-  , [todayGames, results]);
+  , [todayGames]);
 
   // Jogos filtrados e ordenados
   const games = useMemo(() => {
-    // 🚀 CORREÇÃO: Usar results se todayGames estiver vazio
-    const source = (todayGames && todayGames.length > 0) ? todayGames : results;
+    // Sempre usar todayGames — Panorama mostra apenas jogos do dia
+    const source = todayGames ?? [];
     let list = [...source];
 
     if (filterTier) list = list.filter((g: any) => {
@@ -258,17 +258,25 @@ export default function PanoramaPage() {
     if (filterLeague) list = list.filter((g: any) =>
       g.league === filterLeague
     );
-    if (filterMarket) list = list.filter((g: any) =>
-      (g.mainMarket?.label ?? g.mainAxis ?? '')
-        .toLowerCase().includes(filterMarket.toLowerCase())
-    );
+    if (filterMarket) list = list.filter((g: any) => {
+      const mk = filterMarket.toLowerCase();
+      const mainLabel = (g.mainMarket?.label ?? '').toLowerCase();
+      const comboLabels = (g.combo ?? []).map((c: any) => (c.label ?? '').toLowerCase());
+      return mainLabel.includes(mk) || comboLabels.some((l: string) => l.includes(mk));
+    });
+
+    // Extrair HH:MM de strings como "22/02 15:00" ou "2026-02-22 15:00" ou "15:00"
+    const extractTime = (h: string) => {
+      const m = (h ?? '').match(/(\d{1,2}):(\d{2})/);
+      return m ? parseInt(m[1]) * 60 + parseInt(m[2]) : 9999;
+    };
 
     return list.sort((a: any, b: any) =>
       sortBy === 'score'  ? Number(b.score ?? 0) - Number(a.score ?? 0) :
-      sortBy === 'hora'   ? (a.hour ?? '').localeCompare(b.hour ?? '') :
+      sortBy === 'hora'   ? extractTime(a.hour) - extractTime(b.hour) :
       (a.league ?? '').localeCompare(b.league ?? '')
     );
-  }, [todayGames, results, filterTier, filterLeague, filterMarket, sortBy]);
+  }, [todayGames, filterTier, filterLeague, filterMarket, sortBy]);
 
   return (
     <main style={{ minHeight:'100vh', background:'#0d1117',
