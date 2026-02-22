@@ -1132,31 +1132,35 @@ export function suggestBetBuilder(g) {
   );
 
     // 1. Chutes HT (Fav) - Micro-linha
-    if (allowsHTFinalizations && fav.chFavGol >= 4) {
+    if (allowsHTFinalizations && fav.chFavGol >= 5.0) {
       cands.push({ label: `${fav.lado} ${fav.nome} — Finalizações HT Over 4.5`, axis: "chutes_ht", icon: "🎯", isMicro: true });
-    } else if (allowsHTFinalizations && fav.chFavGol >= 3) {
+    } else if (allowsHTFinalizations && fav.chFavGol >= 3.5) {
       cands.push({ label: `${fav.lado} ${fav.nome} — Finalizações HT Over 3.5`, axis: "chutes_ht", icon: "🎯", isMicro: true });
     }
 
     // 2. Cantos HT (Fav) - Micro-linha
-    if (fav.cantFavHT >= 2.5) {
-      cands.push({ label: `${fav.lado} ${fav.nome} — Over 1.5 Cantos HT`, axis: "cantos_ht", icon: "🚩", isMicro: true });
+    if (fav.cantFavHT >= 4.0) {
+      cands.push({ label: `${fav.lado} ${fav.nome} — Over 3.5 Cantos HT`, axis: "cantos_ht", icon: "🚩", isMicro: true });
+    } else if (fav.cantFavHT >= 3.0) {
+      cands.push({ label: `${fav.lado} ${fav.nome} — Over 2.5 Cantos HT`, axis: "cantos_ht", icon: "🚩", isMicro: true });
     }
 
     // 3. Cantos FT (Geral) - Micro-linha
-    if (g.exC >= 9.0) {
-      cands.push({ label: "Over 6.5 Cantos FT", axis: "cantos", icon: "🚩", isMicro: true });
-    } else if (g.exC >= 7.5) {
-      cands.push({ label: "Over 5.5 Cantos FT", axis: "cantos", icon: "🚩", isMicro: true });
+    if (g.exC >= 10.5) {
+      cands.push({ label: "Over 8.5 Cantos FT", axis: "cantos", icon: "🚩", isMicro: true });
+    } else if (g.exC >= 9.0) {
+      cands.push({ label: "Over 7.5 Cantos FT", axis: "cantos", icon: "🚩", isMicro: true });
     }
 
-    // 4. Gols HT - Micro-linha
-    if (fav.gol05HTFav >= 55 || (g.golsHTH || 0) + (g.golsHTA || 0) >= 1.0) {
+    // 4. Gols HT - Micro-linha (Extremamente restrito pelo risco)
+    if (fav.gol05HTFav >= 80 && ((g.golsHTH || 0) + (g.golsHTA || 0) >= 1.5)) {
       cands.push({ label: "Over 0.5 Gols HT", axis: "golsHT", icon: "⏱️", isMicro: true });
     }
 
-    // 5. Gols FT - Micro-linha
-    if (g.exG >= 2.0) {
+    // 5. Gols FT - Micro-linha (Foco na dominância nos 90min)
+    if (g.exG >= 2.5 && fav.afFav >= 60) {
+      cands.push({ label: `${fav.lado} ${fav.nome} — Over 1.5 Gols FT`, axis: "gols", icon: "⚽", isMicro: true });
+    } else if (g.exG >= 2.3) {
       cands.push({ label: "Over 1.5 FT", axis: "gols", icon: "⚽", isMicro: true });
     }
 
