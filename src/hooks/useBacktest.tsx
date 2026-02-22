@@ -220,9 +220,9 @@ export const useBacktest = () => {
   }, [manualInputs]);
 
   // Funções
-  const handleImport = async (fileOverride?: File) => {
+  const handleImport = async (fileOverride?: File): Promise<number> => {
     const f = fileOverride ?? file;
-    if (!f) return;
+    if (!f) return 0;
     setLoading(true);
     setErr("");
     try {
@@ -239,7 +239,8 @@ export const useBacktest = () => {
       }));
       setResults(results);
       setShowTable(true);
-      console.log(`[CSV-IMPORT] ${results.length} jogos importados (NS+FT) com engine completo`);
+      const importedCount = results.length;
+      console.log(`[CSV-IMPORT] ${importedCount} jogos importados (NS+FT) com engine completo`);
 
       // Salvar no Supabase com dados completos (incluindo favorito e combo)
       setSaveError(null); // Limpar erro anterior
@@ -317,8 +318,10 @@ export const useBacktest = () => {
         localStorage.setItem('lucrativo-processed-games', JSON.stringify(results));
         localStorage.setItem('lucrativo-cache-timestamp', '2025-02-21-19'); // Mesma versão do build
       }
+      return importedCount;
     } catch (e: any) {
-      setErr("Erro ao importar CSV: " + (e?.message ?? String(e)));
+      setErr(e.message || "Erro na importação");
+      return 0;
     } finally {
       setLoading(false);
     }
@@ -384,9 +387,9 @@ export const useBacktest = () => {
   };
 
   // 🆕 Wrapper para importFromCSV (compatibilidade com Admin)
-  const importFromCSV = async (csvFile: File) => {
+  const importFromCSV = async (csvFile: File): Promise<number> => {
     setFile(csvFile);
-    await handleImport(csvFile);
+    return await handleImport(csvFile);
   };
 
   // 🆕 Wrapper para enrichWithOdds (compatibilidade com Admin)

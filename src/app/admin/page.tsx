@@ -70,16 +70,15 @@ export default function AdminPage() {
     if (!csvFile) return;
     setProcessing(true);
     try {
-      // a) Parse + save via hook (já existente)
-      await importFromCSV(csvFile);
+      // a) Parse + save via hook (retorna count de jogos importados)
+      const saved = await importFromCSV(csvFile);
       // b) Buscar odds (já existente)
       const apiKey = localStorage.getItem('football-api-key') ?? '';
       let withOdds = 0;
       if (apiKey) {
-        // chama o enriquecimento existente
         withOdds = await enrichWithOdds(apiKey);
       }
-      setProcessResult({ saved: results.length, withOdds });
+      setProcessResult({ saved, withOdds });
     } finally {
       setProcessing(false);
     }

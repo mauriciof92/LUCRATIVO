@@ -750,7 +750,8 @@ export function classifyProfile(g) {
   if (fav.afDiff <= 15 && g.exG >= 3.5 && fav.afUnder >= 45 && g.cv <= 40)                   return "balanced_btts";
   if (fav.afDiff <= 20 && g.exG >= 3.2 && fav.afUnder >= 42 && g.cv <= 45)                   return "balanced_btts";
   if (fav.afDiff <= 12 && g.exG >= 2.5)                                                       return "balanced_moderate";
-  if (g.exC >= 9 && g.exG < 3)                                                                return "corner_heavy";
+  if (fav.cantFavHT >= 5.5 && g.exC >= 9) return "corner_heavy";
+  if (g.exC >= 9 && g.exG < 3)            return "corner_heavy";
   if (g.exG < 2.5 && g.cv >= 30)                                                              return "low_goals";
   return "generic";
 }
@@ -979,8 +980,21 @@ export function suggestCombo(g) {
   if (allowsHTFinalizations && allowsHTByElite && main.axis !== "chutes_ht" && fav.chFavTot >= 9)
     cands.push({ label: `${fav.lado} ${fav.nome} — Finalizações HT Over 6.5`, axis: "chutes_ht", icon: "🎯" });
 
-  // Cantos FT — buffer extremo v1.2: APPG >= 0.70 + exC >= 9.0 + cvCantos <= 55 (relaxado)
-  if (main.axis !== "cantos" && main.axis !== "cantos_ht" && g.exC >= 9.0 && g.cvCantos <= 55 && favAppg >= 0.70) {
+  // 🔁 DIVERSIFICAÇÃO CROSS-AXIS — Cantos HT para perfis com pressão ofensiva
+  // Não exige APPG (§4 é para finalizações, não cantos). Exige: cantFavHT com buffer, exC decente, CV controlado
+  // Restaurado: este bloco foi removido no refatoramento 4b0c8a0 e era o principal gerador de cantos
+  if (main.axis !== "cantos_ht" && main.axis !== "cantos"
+      && !["low_goals"].includes(profile)
+      && fav.cantFavHT >= 3.5
+      && g.exC >= 8
+      && (g.cvCantosHT || 0) <= 65
+  ) {
+    const linhaCantos = (fav.cantFavHT >= 5.5 && (g.percMais5EscanteiosHT || 0) >= 40) ? "4.5" : "3.5";
+    cands.push({ label: `${fav.lado} ${fav.nome} — Over ${linhaCantos} Cantos HT`, axis: "cantos_ht", icon: "🚩" });
+  }
+
+  // Cantos FT — buffer extremo v1.2: APPG >= 0.90 + exC >= 12.0 + cvCantos <= 40 (elite)
+  if (main.axis !== "cantos" && main.axis !== "cantos_ht" && g.exC >= 12.0 && g.cvCantos <= 40 && favAppg >= 0.90) {
     // Usar estatísticas de cantos por período para decisão mais inteligente
     const cantos0a10 = g.mediaEscanteios0a10 || 0;
     const cantos11a20 = g.mediaEscanteios11a20 || 0;
@@ -997,14 +1011,14 @@ export function suggestCombo(g) {
     }
   }
 
-  // Cantos HT — APPG >= 0.55 + Cant37 >= 0.20 (Flexibilização de Captação) + Buffer +1 + cvCantosHT <= 70
+  // Cantos HT — APPG >= 0.60 + Cant37 >= 0.20 (Flexibilização de Captação) + Buffer +1 + cvCantosHT <= 65
   // Flexibilização exclusiva para perfis de cantos
   const isCornerProfile = profile === "corner_dominant" || profile === "corner_heavy";
-  const appgThreshold = isCornerProfile ? 0.55 : 0.60;
+  const appgThreshold = isCornerProfile ? 0.60 : 0.65;
   const cant37Threshold = isCornerProfile ? 0.20 : 0.20;
-  const cvCantosThreshold = isCornerProfile ? 70 : 65;
+  const cvCantosThreshold = isCornerProfile ? 65 : 55;
   
-  const thresholdCantos = (fav.afFav > 80) ? 3.5 : 4.0;
+  const thresholdCantos = (fav.afFav > 80) ? 3.8 : 4.5;
   if (main.axis !== "cantos_ht" && main.axis !== "cantos" && fav.cantFavHT >= thresholdCantos && favAppg >= appgThreshold && favCant37 >= cant37Threshold && (g.cvCantosHT || 0) <= cvCantosThreshold) {
     const perc4EscanteiosHT = g.percMais4EscanteiosHT || 0;
     const perc5EscanteiosHT = g.percMais5EscanteiosHT || 0;
