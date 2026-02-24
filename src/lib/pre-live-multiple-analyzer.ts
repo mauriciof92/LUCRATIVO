@@ -287,7 +287,7 @@ export class PreLiveMultipleAnalyzer {
   }
 
   // Analisa CSV do dia para gerar múltiplas pré-live
-  analyzeLiveMultiples(csvText: string, oddsMap?: Record<number, PreMatchOdds>, fixtureMap?: Record<string, number>): {
+  analyzeLiveMultiples(csvText: string, oddsMap?: Record<number, PreMatchOdds>, fixtureMap?: Record<string, number>, ignoredMatches: string[] = []): {
     suggestions: LiveMultipleSuggestion[];
     summary: {
       totalGames: number;
@@ -303,9 +303,17 @@ export class PreLiveMultipleAnalyzer {
       // Filtra jogos que ainda não começaram
       const upcomingGames = games.filter(g => g.status === "NS" || !g.status);
       console.log(`🎯 ${upcomingGames.length} jogos disponíveis para análise pré-live`);
+
+      // 🔄 Filtrar jogos ignorados pelo usuário (blacklist temporária — efeito roleta, só na sessão)
+      const availableGames = ignoredMatches.length > 0
+        ? upcomingGames.filter(g => !ignoredMatches.includes(g.match))
+        : upcomingGames;
+      if (ignoredMatches.length > 0) {
+        console.log(`🔄 ${ignoredMatches.length} jogos ignorados pelo usuário. ${availableGames.length} restantes.`);
+      }
       
       // 🚫 FILTRO DE QUALIDADE — Score ≥ 65% E Confiança ≥ 55%
-      const qualityGames = upcomingGames.filter(g => {
+      const qualityGames = availableGames.filter(g => {
         const scoreResult = computeScore(g);
         const score = typeof scoreResult === 'number' ? scoreResult : scoreResult?.score || 0;
         const confResult = computeConfidence(g);

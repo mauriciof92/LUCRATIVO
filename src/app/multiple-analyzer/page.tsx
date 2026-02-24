@@ -26,6 +26,7 @@ export default function MultipleAnalyzerPage() {
   const [odds, setOdds] = useState<Record<number, PreMatchOdds>>({});
   const [unmatchedGames, setUnmatchedGames] = useState<any[]>([]);
   const [showUnmatchedDetails, setShowUnmatchedDetails] = useState(false);
+  const [ignoredMatches, setIgnoredMatches] = useState<string[]>([]);
 
   const analyzer = useMemo(() => new PreLiveMultipleAnalyzer(), []);
 
@@ -49,7 +50,7 @@ export default function MultipleAnalyzerPage() {
     setAnalyzing(true);
     setError('');
     try {
-      const result = analyzer.analyzeLiveMultiples(text);
+      const result = analyzer.analyzeLiveMultiples(text, undefined, undefined, ignoredMatches);
       setSuggestions(result.suggestions ?? []);
       setSummary(result.summary);
       if ((result.suggestions ?? []).length === 0) {
@@ -86,7 +87,7 @@ export default function MultipleAnalyzerPage() {
       // Re-analisar com odds injetadas
       if (result.oddsMap && result.fixtureMap) {
         analyzer.injectRealOdds(result.oddsMap, result.fixtureMap);
-        const enriched = analyzer.analyzeLiveMultiples(csvText, result.oddsMap, result.fixtureMap);
+        const enriched = analyzer.analyzeLiveMultiples(csvText, result.oddsMap, result.fixtureMap, ignoredMatches);
         setSuggestions(enriched.suggestions);
       }
 
@@ -97,6 +98,36 @@ export default function MultipleAnalyzerPage() {
       setError('Erro ao buscar odds: ' + (e?.message ?? String(e)));
     } finally {
       setLoadingOdds(false);
+    }
+  };
+
+  // 🔄 Handler: Ignorar jogo e regerar bilhetes (efeito roleta — só na sessão)
+  const handleIgnoreMatch = (matchName: string) => {
+    const updated = [...ignoredMatches, matchName];
+    setIgnoredMatches(updated);
+    // Regerar bilhetes imediatamente sem o jogo ignorado
+    const text = csvText.trim();
+    if (!text) return;
+    try {
+      const result = analyzer.analyzeLiveMultiples(text, undefined, undefined, updated);
+      setSuggestions(result.suggestions ?? []);
+      setSummary(result.summary);
+    } catch (e) {
+      console.error('Erro ao regerar bilhetes:', e);
+    }
+  };
+
+  // 🔄 Handler: Limpar todos os jogos ignorados e regerar
+  const handleClearIgnored = () => {
+    setIgnoredMatches([]);
+    const text = csvText.trim();
+    if (!text) return;
+    try {
+      const result = analyzer.analyzeLiveMultiples(text);
+      setSuggestions(result.suggestions ?? []);
+      setSummary(result.summary);
+    } catch (e) {
+      console.error('Erro ao regerar bilhetes:', e);
     }
   };
 
@@ -208,9 +239,23 @@ export default function MultipleAnalyzerPage() {
             {/* SESSÃO: SINFONIA DE PARDAIS */}
             {suggestions.filter(s => s.type === 'sinfonia').length > 0 && (
               <div style={{ marginBottom: 40 }}>
-                <h2 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 16px', color: '#00e676', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  🐦 Sinfonia de Pardais (Bet Builder)
-                </h2>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                  <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: '#00e676', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    🐦 Sinfonia de Pardais (Bet Builder)
+                  </h2>
+                  {ignoredMatches.length > 0 && (
+                    <button
+                      onClick={handleClearIgnored}
+                      style={{
+                        background: 'transparent', border: `1px solid ${C.muted}`,
+                        borderRadius: 6, padding: '4px 10px', fontSize: 11,
+                        color: C.muted, cursor: 'pointer',
+                      }}
+                    >
+                      🔄 Restaurar {ignoredMatches.length} jogo(s)
+                    </button>
+                  )}
+                </div>
                 <div style={{ display: 'grid', gap: 16 }}>
                   {suggestions.filter(s => s.type === 'sinfonia').map((s, i) => {
                     const style = TICKET_STYLES[s.type];
@@ -257,12 +302,25 @@ export default function MultipleAnalyzerPage() {
                                 borderRadius: 8, padding: '12px',
                               }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${C.border}` }}>
-                                  <div>
+                                  <div style={{ flex: 1 }}>
                                     <div style={{ fontSize: 14, fontWeight: 700 }}>Criar Aposta</div>
                                     <div style={{ color: C.muted, fontSize: 12 }}>{match}</div>
                                   </div>
-                                  <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>
-                                    {gameOdd > 1 ? gameOdd.toFixed(2) : '—'}
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                    <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>
+                                      {gameOdd > 1 ? gameOdd.toFixed(2) : '—'}
+                                    </div>
+                                    <button
+                                      onClick={() => handleIgnoreMatch(match)}
+                                      title={`Trocar ${match} por outro jogo`}
+                                      style={{
+                                        background: 'transparent', border: `1px solid ${C.muted}40`,
+                                        borderRadius: 6, padding: '3px 8px', fontSize: 12,
+                                        color: C.muted, cursor: 'pointer', whiteSpace: 'nowrap',
+                                      }}
+                                    >
+                                      🔄
+                                    </button>
                                   </div>
                                 </div>
 

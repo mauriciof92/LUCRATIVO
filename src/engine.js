@@ -810,6 +810,7 @@ export function suggestMainMarket(g) {
 
   // Fallback: Lógica tradicional
   const excludedLeaguesForHT = [
+    "Championship",
     "Liga BetPlay",
     "Carioca Serie A",
     "League One",
@@ -940,6 +941,7 @@ export function suggestCombo(g) {
 
   // 🚫 Campeonatos que não devem ter finalizações HT sugeridas
   const excludedLeaguesForHT = [
+    "Championship",
     "Liga BetPlay",
     "Carioca Serie A",
     "League One",
@@ -1119,6 +1121,7 @@ export function suggestBetBuilder(g) {
 
   // 🚫 Campeonatos que não devem ter finalizações HT sugeridas
   const excludedLeaguesForHT = [
+    "Championship",
     "Liga BetPlay",
     "Carioca Serie A",
     "League One",
