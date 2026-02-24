@@ -455,7 +455,7 @@ export default function MultipleAnalyzerPage() {
             <div style={{ background: C.surface, border: `1px solid ${C.gold}`, borderRadius: 8, padding: 16 }}>
               {unmatchedGames.map((game, i) => (
                 <div key={i} style={{ color: C.muted, fontSize: 12, marginBottom: 4 }}>
-                  {game.homeTeam} x {game.awayTeam}
+                  {game.home || game.homeTeam || '?'} x {game.away || game.awayTeam || '?'}
                 </div>
               ))}
             </div>
