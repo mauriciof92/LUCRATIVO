@@ -169,24 +169,46 @@ export class PreLiveMultipleAnalyzer {
   }
 
   // Pontua especificidade de um mercado: HT por time > HT total > FT específico > FT genérico
+  // Usado internamente pela Sinfonia (via suggestBetBuilder) — NÃO usado para múltiplas clássicas
   private marketSpecificity(label: string): number {
     const l = label.toLowerCase();
-    // Finalizações HT por time (ex: "Arsenal — Finalizações HT Over 5.5")
     if ((l.includes('finaliz') || l.includes('chute')) && l.includes('ht')) return 100;
-    // Cantos HT por time (ex: "Arsenal — Over 3.5 Cantos HT")
     if ((l.includes('canto') || l.includes('escanteio')) && l.includes('ht')) return 95;
-    // Blitz HT
     if (l.includes('blitz')) return 100;
-    // Cantos FT (ex: "Over 8.5 Cantos FT")
     if (l.includes('canto') || l.includes('escanteio')) return 85;
-    // Gols HT com time (ex: "Vence + Over 0.5 HT")
     if (l.includes('ht') && l.includes('vence')) return 60;
-    // Over 2.5 FT / BTTS
     if (l.includes('over 2.5') || l.includes('ambas marcam') || l.includes('btts')) return 40;
-    // Over 1.5 FT / Vence genérico — último recurso
     if (l.includes('over 1.5')) return 10;
     if (l.includes('vence')) return 20;
     return 30;
+  }
+
+  // 🎯 Prioridade para múltiplas CLÁSSICAS: mercados tradicionais e equilibrados primeiro
+  // Micro-linhas HT ficam como último recurso (território da Sinfonia)
+  private marketTraditionalPriority(label: string): number {
+    const l = label.toLowerCase();
+    // Tier 1: Mercados tradicionais com odds equilibradas
+    if (l.includes('over 2.5') && l.includes('ambas marcam')) return 100; // Over 2.5 + BTTS combo
+    if (l.includes('over 2.5') && !l.includes('canto')) return 95;         // Over 2.5 FT
+    if (l.includes('ambas marcam') || l.includes('btts')) return 95;       // BTTS
+    // Tier 2: Favorito com gols
+    if (l.includes('vence') && l.includes('over')) return 90;              // Vence + Over X
+    if (l.includes('vence') && l.includes('ht')) return 85;                // Vence + HT
+    // Tier 3: Mercados de gols genéricos
+    if (l.includes('over 1.5') && !l.includes('canto') && !l.includes('ht')) return 80; // Over 1.5 FT
+    if (l.includes('vence') && !l.includes('finaliz')) return 75;          // Favorito Vence
+    if (l.includes('under')) return 70;                                     // Under 2.5
+    // Tier 4: Cantos FT (ainda tradicional)
+    if ((l.includes('canto') || l.includes('escanteio')) && !l.includes('ht')) return 60;
+    // Tier 5: Gols HT (mais específico mas ainda operável)
+    if (l.includes('gol') && l.includes('ht')) return 50;
+    if (l.includes('over 0.5') && l.includes('ht')) return 50;
+    if (l.includes('over 1.5') && l.includes('ht')) return 45;
+    // Tier 6: Micro-linhas HT — território da Sinfonia, último recurso em clássicas
+    if ((l.includes('canto') || l.includes('escanteio')) && l.includes('ht')) return 30;
+    if ((l.includes('finaliz') || l.includes('chute')) && l.includes('ht')) return 20;
+    if (l.includes('blitz')) return 20;
+    return 40;
   }
 
   // 🔧 Seleção inteligente: linhas específicas (HT por time) primeiro, genéricas por último
@@ -246,10 +268,10 @@ export class PreLiveMultipleAnalyzer {
       allCandidates.push(...combo);
     }
 
-    // Ordenar por especificidade (se não for Sinfonia, Sinfonia já tem ordem boa)
+    // Ordenar: Sinfonia mantém ordem do engine; Clássicas priorizam mercados tradicionais
     if (!isSinfonia) {
       allCandidates.sort((a: any, b: any) =>
-        this.marketSpecificity(b.label) - this.marketSpecificity(a.label)
+        this.marketTraditionalPriority(b.label) - this.marketTraditionalPriority(a.label)
       );
     }
 
