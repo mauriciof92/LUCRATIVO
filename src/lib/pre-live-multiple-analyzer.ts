@@ -14,7 +14,7 @@ const TIER_CONFIG: Record<string, { nGames: number; marketsPerGame: number; stak
   gold:      { nGames: 3, marketsPerGame: 1, stake: 25, minTotal: 3.0,  maxTotal: 15.0 },
   agressivo: { nGames: 4, marketsPerGame: 1, stake: 15, minTotal: 4.0,  maxTotal: 30.0 },
   bingo:     { nGames: 5, marketsPerGame: 1, stake: 10, minTotal: 5.0,  maxTotal: 60.0 },
-  sinfonia:  { nGames: 2, marketsPerGame: 3, stake: 20, minTotal: 1.5,  maxTotal: 20.0 }, // 🆕 Sinfonia de Pardais (Odd mínima muito baixa para acomodar micro-linhas)
+  sinfonia:  { nGames: 2, marketsPerGame: 6, stake: 20, minTotal: 1.5,  maxTotal: 20.0 }, // 🆕 Sinfonia: teto teórico=6; cap real é dinâmico por qualidade do jogo
 };
 // Qualidade mínima por jogo (gate de entrada)
 const MIN_SCORE = 0.55;  // Score ≥ 55%
@@ -451,8 +451,20 @@ export class PreLiveMultipleAnalyzer {
           continue;
         }
 
+        // Cap dinâmico para Sinfonia: mais qualidade estatística = mais linhas permitidas
+        let effectiveMax = tier.marketsPerGame;
+        if (isSinfonia) {
+          const poison = detectPoisonTriggers(g);
+          const sr = computeScore(g);
+          const sc = typeof sr === 'number' ? sr : (sr as any)?.score || 0;
+          if (poison.isPoison) effectiveMax = 5;       // Dominância extrema → até 5 micro-linhas
+          else if (sc >= 0.70) effectiveMax = 4;        // Score alto → até 4
+          else effectiveMax = 3;                         // Qualidade padrão → 3
+          console.log(`[SGP-sinfonia] ${g.match}: cap dinâmico = ${effectiveMax} mercados (score=${(sc*100).toFixed(0)}%, poison=${poison.isPoison})`);
+        }
+
         // Extrai mercados, BLOQUEANDO famílias de eixo já presentes no bilhete (Sinfonia ignora bloqueio cross-jogo)
-        const markets = this.getGameMarkets(g, globalUsedSigs, tier.marketsPerGame, ticketBroadAxes, isSinfonia);
+        const markets = this.getGameMarkets(g, globalUsedSigs, effectiveMax, ticketBroadAxes, isSinfonia);
         if (markets.length < 2 && isSinfonia) {
           console.log(`[SGP-${typeId}] ${g.match}: Sinfonia exige pelo menos 2 mercados por jogo — pulando`);
           continue;
