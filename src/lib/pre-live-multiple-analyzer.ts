@@ -7,14 +7,15 @@ const MAX_MARKET_ODD = 2.50;  // Odd máxima por mercado individual
 const MIN_GAME_ODD = 1.20;    // Odd mínima por jogo (produto dos mercados do jogo)
 const MAX_GAME_ODD = 15.00;   // Odd máxima por jogo (aumentada para permitir Sinfonia com 3 mercados)
 
-// Tiers baseados em número de JOGOS (cada jogo = 2-3 mercados Bet Builder)
-const TIER_CONFIG: Record<string, { nGames: number; marketsPerGame: number; stake: number; minTotal: number; maxTotal: number }> = {
-  bronze:    { nGames: 2, marketsPerGame: 1, stake: 50, minTotal: 1.5,  maxTotal: 5.0  },
-  silver:    { nGames: 3, marketsPerGame: 1, stake: 35, minTotal: 2.0,  maxTotal: 10.0 },
-  gold:      { nGames: 3, marketsPerGame: 1, stake: 25, minTotal: 3.0,  maxTotal: 15.0 },
-  agressivo: { nGames: 4, marketsPerGame: 1, stake: 15, minTotal: 4.0,  maxTotal: 30.0 },
-  bingo:     { nGames: 5, marketsPerGame: 1, stake: 10, minTotal: 5.0,  maxTotal: 60.0 },
-  sinfonia:  { nGames: 2, marketsPerGame: 6, stake: 20, minTotal: 1.5,  maxTotal: 20.0 }, // 🆕 Sinfonia: teto teórico=6; cap real é dinâmico por qualidade do jogo
+// Tiers baseados em número de JOGOS (cada jogo = 1 mercado tradicional nas clássicas)
+// minGames = mínimo de jogos exigido para o bilhete ser gerado
+const TIER_CONFIG: Record<string, { nGames: number; minGames: number; marketsPerGame: number; stake: number; minTotal: number; maxTotal: number }> = {
+  bronze:    { nGames: 2, minGames: 2, marketsPerGame: 1, stake: 50, minTotal: 1.5,  maxTotal: 5.0  },
+  silver:    { nGames: 3, minGames: 2, marketsPerGame: 1, stake: 35, minTotal: 2.0,  maxTotal: 10.0 },
+  gold:      { nGames: 4, minGames: 3, marketsPerGame: 1, stake: 25, minTotal: 3.0,  maxTotal: 15.0 },
+  agressivo: { nGames: 6, minGames: 5, marketsPerGame: 1, stake: 15, minTotal: 4.0,  maxTotal: 40.0 },
+  bingo:     { nGames: 8, minGames: 6, marketsPerGame: 1, stake: 10, minTotal: 5.0,  maxTotal: 80.0 },
+  sinfonia:  { nGames: 2, minGames: 2, marketsPerGame: 6, stake: 20, minTotal: 1.5,  maxTotal: 20.0 }, // 🆕 Sinfonia: teto teórico=6; cap real é dinâmico por qualidade do jogo
 };
 // Qualidade mínima por jogo (gate de entrada)
 const MIN_SCORE = 0.55;  // Score ≥ 55%
@@ -514,8 +515,8 @@ export class PreLiveMultipleAnalyzer {
         gamesUsed++;
       }
 
-      console.log(`[SGP-${typeId}] ${gamesUsed}/${tier.nGames} jogos usados`);
-      if (gamesUsed < Math.min(tier.nGames, 2)) return null;
+      console.log(`[SGP-${typeId}] ${gamesUsed}/${tier.nGames} jogos usados (mínimo exigido: ${tier.minGames})`);
+      if (gamesUsed < tier.minGames) return null;
 
       // Todas devem ter odd
       if (allSelections.some((s: any) => !s.odd || s.odd <= 1)) return null;
