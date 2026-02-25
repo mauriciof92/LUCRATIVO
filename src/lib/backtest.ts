@@ -12,6 +12,10 @@ export interface BetResult {
   ftGoals: number;
   // 🆕 Campo do Supabase para timestamp
   created_at?: string;
+  // 🆕 ID real da fixture na API-Football (preenchido pelo fixture-matcher)
+  fixtureId?: number;
+  // 🆕 Data de importação ISO (ex: "2026-02-25")
+  importDate?: string;
   // 🆕 Campos reais da API para validação
   actualTotalShotsHT?: number;
   actualTotalCornersHT?: number;

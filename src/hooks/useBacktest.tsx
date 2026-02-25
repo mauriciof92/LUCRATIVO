@@ -2,12 +2,42 @@ import { useState, useEffect, useMemo } from "react";
 import { runBacktest, processNSGames, enrichWithRealStats, validateWithManualInput, resolveMarketResult, type BetResult } from "../lib/backtest";
 import { loadStoredBacktest, saveStoredBacktest, type StoredBacktest } from "../lib/storage";
 import { fetchRealStatsForMatches, fetchFixtureStatistics } from "../lib/footballApi";
-import { parseCSV } from "../engine";
+import { parseCSV, extractDateFromHour } from "../engine";
 import { supabase, supabaseConfigured } from "../lib/supabase";
 import { Badge, KPI, TH, TD, mktCat, C } from "../components/ui";
 
 // 🆕 CONSTANTE GLOBAL - STAKE FIXA R$ 25,00
 export const STAKE_FIXA = 25.00;
+
+// Retenção máxima de dados (dias)
+const RETENTION_DAYS = 30;
+
+// Extrai data ISO ("2026-02-25") do campo hour do CSV
+function getImportDateISO(hour: string): string {
+  const h = (hour || '').trim();
+  // DD/MM/YYYY
+  const ddmmyyyy = h.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (ddmmyyyy) return `${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}`;
+  // DD/MM (sem ano → usar ano atual)
+  const ddmm = h.match(/^(\d{2})\/(\d{2})/);
+  if (ddmm) return `${new Date().getFullYear()}-${ddmm[2]}-${ddmm[1]}`;
+  // ISO: YYYY-MM-DD
+  const iso = h.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (iso) return iso[1];
+  // Sem data → data atual
+  return new Date().toISOString().split('T')[0];
+}
+
+// Remove resultados mais antigos que RETENTION_DAYS
+function applyRetention(results: BetResult[]): BetResult[] {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - RETENTION_DAYS);
+  const cutoffISO = cutoff.toISOString().split('T')[0];
+  return results.filter(r => {
+    const d = (r as any).importDate || getImportDateISO(r.hour);
+    return d >= cutoffISO;
+  });
+}
 
 // Re-export UI components for backward compatibility
 export { Badge, KPI, TH, TD, mktCat } from "../components/ui";
@@ -57,18 +87,16 @@ export const useBacktest = () => {
       if (typeof window === 'undefined') return;
       setLoading(true);
       try {
-        // ── PRIORIDADE 1: Cache local completo (salvo pelo import) ──
+        // ── PRIORIDADE 1: Cache local acumulado (salvo pelo import com merge) ──
         const cached = localStorage.getItem('lucrativo-processed-games');
-        const cacheTimestamp = localStorage.getItem('lucrativo-cache-timestamp');
-        const buildVersion = '2025-02-21-19'; // Cache-buster: força invalidação de builds antigos
-        
-        // Se cache existe E é da mesma versão do build, usar cache
-        if (cached && cacheTimestamp === buildVersion) {
+        if (cached) {
           try {
             const parsed = JSON.parse(cached);
             if (Array.isArray(parsed) && parsed.length > 0) {
+              // Aplicar retenção de 30 dias ao carregar
+              const retained = applyRetention(parsed);
               // Recalcular resultados de jogos FT com result pendente
-              const resolved = parsed.map((r: any) => {
+              const resolved = retained.map((r: any) => {
                 const isFT = r.status === 'FT';
                 const mr = r.mainMarket;
                 if (isFT && mr && (mr.result === 'no-odd' || mr.result === 'pending_manual') && mr.label) {
@@ -79,20 +107,18 @@ export const useBacktest = () => {
                 }
                 return r;
               });
-              console.log(`[HYDRATION] Cache local v${buildVersion}: ${resolved.length} jogos`);
+              console.log(`[HYDRATION] Cache local: ${resolved.length} jogos (${parsed.length - retained.length} removidos por retenção ${RETENTION_DAYS}d)`);
               setResults(resolved);
               setShowTable(true);
+              // Atualizar cache com dados limpos (sem expirados)
+              if (retained.length < parsed.length) {
+                localStorage.setItem('lucrativo-processed-games', JSON.stringify(resolved));
+              }
               const savedCsv = localStorage.getItem('lucrativo-last-csv');
               if (savedCsv) setLastCsvText(savedCsv);
               return;
             }
           } catch { /* cache corrompido, continuar */ }
-        } else if (cached && cacheTimestamp !== buildVersion) {
-          // Cache de versão antiga — invalidar e forçar refresh
-          console.log(`[HYDRATION] Cache antigo v${cacheTimestamp} ≠ build v${buildVersion} — invalidando`);
-          localStorage.removeItem('lucrativo-processed-games');
-          localStorage.removeItem('lucrativo-last-csv');
-          localStorage.removeItem('lucrativo-cache-timestamp');
         }
 
         // ── PRIORIDADE 2: Supabase (fallback remoto) ──
@@ -168,9 +194,9 @@ export const useBacktest = () => {
         console.log(`[HYDRATION] Supabase: ${mapped.length} jogos`);
         setResults(mapped);
         setShowTable(true);
-        // Salvar no cache local com timestamp para forçar refresh em novos deploys
+        // Salvar no cache local com timestamp
         localStorage.setItem('lucrativo-processed-games', JSON.stringify(mapped));
-        localStorage.setItem('lucrativo-cache-timestamp', buildVersion);
+        localStorage.setItem('lucrativo-cache-timestamp', new Date().toISOString().split('T')[0]);
       } catch (e) {
         console.error('[HYDRATION] Erro:', e);
       } finally {
@@ -231,16 +257,32 @@ export const useBacktest = () => {
       if (typeof window !== 'undefined') localStorage.setItem('lucrativo-last-csv', text);
       // Usar processNSGames para processar TODOS os jogos (NS + FT)
       const allResults = processNSGames(text);
-      // Adicionar stake fixa
-      const results: BetResult[] = allResults.map(r => ({
+      // Adicionar stake fixa + importDate
+      const newResults: BetResult[] = allResults.map(r => ({
         ...r,
+        importDate: getImportDateISO(r.hour),
         mainMarket: { ...r.mainMarket, stake: STAKE_FIXA },
         combo: r.combo.map(c => ({ ...c, stake: STAKE_FIXA })),
-      }));
-      setResults(results);
+      })) as any;
+
+      // 🔄 MERGE com resultados existentes (acumular histórico)
+      const prevResults = results; // estado anterior
+      const mergedMap = new Map<string, BetResult>();
+      // 1. Inserir resultados anteriores
+      for (const r of prevResults) mergedMap.set(r.id, r);
+      // 2. Sobrescrever com novos (mesmo jogo = atualiza, novo jogo = adiciona)
+      for (const r of newResults) mergedMap.set(r.id, r);
+      // 3. Aplicar retenção de 30 dias
+      const merged = applyRetention(Array.from(mergedMap.values()));
+
+      setResults(merged);
       setShowTable(true);
-      const importedCount = results.length;
-      console.log(`[CSV-IMPORT] ${importedCount} jogos importados (NS+FT) com engine completo`);
+      const importedCount = newResults.length;
+      const totalCount = merged.length;
+      console.log(`[CSV-IMPORT] ${importedCount} jogos novos importados, ${totalCount} total acumulado (merge + retenção ${RETENTION_DAYS}d)`);
+
+      // Usar merged em vez de results para Supabase upsert
+      const mergedResults = merged;
 
       // Salvar no Supabase com dados completos (incluindo favorito e combo)
       setSaveError(null); // Limpar erro anterior
@@ -257,7 +299,7 @@ export const useBacktest = () => {
             throw pingErr;
           }
 
-          const upsertRows = results.map(r => ({
+          const upsertRows = mergedResults.map(r => ({
             id: r.id,
             match: r.match,
             league: r.league,
@@ -313,10 +355,10 @@ export const useBacktest = () => {
         }
       }
 
-      // Salvar no cache local como backup com timestamp
+      // Salvar no cache local como backup (sem versão fixa — merge garante consistência)
       if (typeof window !== 'undefined') {
-        localStorage.setItem('lucrativo-processed-games', JSON.stringify(results));
-        localStorage.setItem('lucrativo-cache-timestamp', '2025-02-21-19'); // Mesma versão do build
+        localStorage.setItem('lucrativo-processed-games', JSON.stringify(merged));
+        localStorage.setItem('lucrativo-cache-timestamp', new Date().toISOString().split('T')[0]);
       }
       return importedCount;
     } catch (e: any) {
@@ -350,12 +392,14 @@ export const useBacktest = () => {
     setEnriching(true);
     setEnrichErr("");
     try {
-      // Chamar API route para obter stats
-      const matches = results.map(r => ({
-        id: parseInt(r.id),
+      // Chamar API route para obter stats — apenas jogos FT que precisam de dados
+      const ftGames = results.filter(r => r.status === 'FT');
+      const matches = ftGames.map(r => ({
         homeTeam: r.match.split(" x ")[0]?.trim() || "",
         awayTeam: r.match.split(" x ")[1]?.trim() || "",
-        date: new Date().toISOString().split('T')[0], // Usar data atual
+        date: (r as any).importDate || new Date().toISOString().split('T')[0],
+        afH: 0,
+        afA: 0,
       }));
       
       const response = await fetch('/api/football-results', {
@@ -402,18 +446,20 @@ export const useBacktest = () => {
     return reqUsed; // retorna número de odds enriquecidas
   };
 
-  // 🆕 Jogos do dia (para Panorama)
+  // 🆕 Jogos do dia (para Panorama) — usa importDate como fonte de verdade
   const todayGames = useMemo(() => {
     const now = new Date();
-    const todayISO = now.toISOString().split('T')[0]; // "2026-02-21"
-    const todayDDMM = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}`; // "21/02"
+    const todayISO = now.toISOString().split('T')[0]; // "2026-02-25"
+    const todayDDMM = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}`; // "25/02"
     return results.filter(r => {
+      // Prioridade 1: importDate (adicionado no merge)
+      const importDate = (r as any).importDate;
+      if (importDate) return importDate === todayISO;
+      // Prioridade 2: parse do campo hour
       const h = (r.hour ?? '').trim();
-      // Suporta formatos: "2026-02-21 15:00", "21/02 15:00", "21/02/2026 15:00"
       if (h.startsWith(todayISO)) return true;
       if (h.startsWith(todayDDMM)) return true;
-      // Fallback: se não tem data no hour, considerar como hoje (jogos recem importados)
-      if (!h.includes('/') && !h.includes('-') && h.includes(':')) return true;
+      // SEM fallback perigoso — jogos sem data identificável não são "hoje"
       return false;
     });
   }, [results]);
@@ -455,10 +501,10 @@ export const useBacktest = () => {
         return;
       }
 
-      // Identificar jogos que precisam de dados HT
+      // Identificar jogos que precisam de dados HT (apenas os que têm fixtureId real da API)
       const missingHTResults = stored.results.filter((r: any) => {
-        const fixtureId = parseInt(r.id);
-        if (isNaN(fixtureId) || fixtureId <= 0) return false;
+        const fId = r.fixtureId;
+        if (!fId || typeof fId !== 'number' || fId <= 0) return false;
         
         const hasShotsHT = r.actualTotalShotsHT !== undefined && r.actualTotalShotsHT > 0;
         const hasCornersHT = r.actualTotalCornersHT !== undefined && r.actualTotalCornersHT > 0;
@@ -478,7 +524,7 @@ export const useBacktest = () => {
 
       // Buscar dados em lote (com cache inteligente)
       const syncPromises = missingHTResults.map(async (result: any) => {
-        const fixtureId = parseInt(result.id);
+        const fixtureId = result.fixtureId;
         
         try {
           const cacheKey = `fixture_stats_${fixtureId}`;
@@ -525,7 +571,7 @@ export const useBacktest = () => {
 
       // Atualizar resultados com novos dados
       const updatedResults = stored.results.map((result: any) => {
-        const syncData = validResults.find((r: any) => r?.fixtureId === parseInt(result.id));
+        const syncData = validResults.find((r: any) => r?.fixtureId === result.fixtureId);
         if (!syncData) return result;
 
         const { stats } = syncData;

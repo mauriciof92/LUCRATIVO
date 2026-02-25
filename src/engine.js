@@ -399,6 +399,33 @@ export function getMinOddForLabel(label) {
   return 1.40;
 }
 
+// Gera ID único e determinístico por jogo (hash simples, sem colisão entre imports)
+function generateGameId(home, away, league, hour) {
+  const datePart = extractDateFromHour(hour);
+  const raw = `${(home || '').toLowerCase().trim()}_${(away || '').toLowerCase().trim()}_${(league || '').toLowerCase().trim()}_${datePart}`;
+  // Hash simples: djb2
+  let hash = 5381;
+  for (let i = 0; i < raw.length; i++) {
+    hash = ((hash << 5) + hash + raw.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(36); // base36 = compacto e legível
+}
+
+// Extrai parte de data do campo hour do CSV
+// "25/02 15:00" → "2502" | "25/02/2026 15:00" → "2502" | "15:00" → data atual
+export function extractDateFromHour(hour) {
+  const h = String(hour || '').trim();
+  // DD/MM ou DD/MM/YYYY
+  const m = h.match(/^(\d{2})\/(\d{2})/);
+  if (m) return m[1] + m[2]; // "2502"
+  // ISO: YYYY-MM-DD
+  const iso = h.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return iso[3] + iso[2]; // "2502"
+  // Sem data → usar data atual do sistema
+  const now = new Date();
+  return String(now.getDate()).padStart(2, '0') + String(now.getMonth() + 1).padStart(2, '0');
+}
+
 export function parseCSV(text) {
   const clean = String(text ?? "").replace(/^\uFEFF/, "");
   const rawLines = clean.trim().split(/\r?\n/);
@@ -493,14 +520,20 @@ export function parseCSV(text) {
       rA = sc.a;
     }
 
+    const _home = stripQ(v[idx.home]);
+    const _away = stripQ(v[idx.away]);
+    const _league = stripQ(v[idx.league]);
+    const _hour = stripQ(v[idx.hour]);
+    const _status = stripQ(v[idx.status]);
+
     return {
-      id:      i,
-      home:    stripQ(v[idx.home]),
-      away:    stripQ(v[idx.away]),
-      match:   `${stripQ(v[idx.home])} x ${stripQ(v[idx.away])}`,
-      league:  stripQ(v[idx.league]),
-      hour:    stripQ(v[idx.hour]),
-      status:  stripQ(v[idx.status]),
+      id:      generateGameId(_home, _away, _league, _hour),
+      home:    _home,
+      away:    _away,
+      match:   `${_home} x ${_away}`,
+      league:  _league,
+      hour:    _hour,
+      status:  _status,
       resultHome: rH,
       resultAway: rA,
       exG:     exGsum  ?? exGraw ?? 0,

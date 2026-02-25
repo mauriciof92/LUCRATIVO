@@ -1,4 +1,4 @@
-import { parseCSV, getOddForLabel, classifyProfile, getFavorito, computeConfidence, computeScore, calculateValueBet, getMinOddForLabel, suggestMainMarket, suggestCombo, detectPoisonTriggers, suggestBetBuilder } from "../engine";
+import { parseCSV, getOddForLabel, classifyProfile, getFavorito, computeConfidence, computeScore, calculateValueBet, getMinOddForLabel, suggestMainMarket, suggestCombo, detectPoisonTriggers, suggestBetBuilder, extractDateFromHour } from "../engine";
 import type { PreMatchOdds } from "./footballApi";
 
 // ── CONSTANTES DE QUALIDADE ──────────────────────────────────────────────────
@@ -323,9 +323,18 @@ export class PreLiveMultipleAnalyzer {
       const { games } = parseCSV(csvText);
       console.log(`📊 ${games.length} jogos encontrados no CSV`);
       
-      // Filtra jogos que ainda não começaram
-      const upcomingGames = games.filter(g => g.status === "NS" || !g.status);
-      console.log(`🎯 ${upcomingGames.length} jogos disponíveis para análise pré-live`);
+      // Filtra jogos que ainda não começaram E são de hoje
+      const todayDDMM = (() => {
+        const now = new Date();
+        return String(now.getDate()).padStart(2, '0') + String(now.getMonth() + 1).padStart(2, '0');
+      })();
+      const upcomingGames = games.filter(g => {
+        if (g.status && g.status !== 'NS') return false;
+        // Verificar se o jogo é de hoje (evitar jogos NS de dias anteriores no CSV acumulado)
+        const gameDateDDMM = extractDateFromHour(g.hour);
+        return gameDateDDMM === todayDDMM;
+      });
+      console.log(`🎯 ${upcomingGames.length} jogos NS de hoje disponíveis para análise pré-live`);
 
       // 🔄 Filtrar jogos ignorados pelo usuário (blacklist temporária — efeito roleta, só na sessão)
       const availableGames = ignoredMatches.length > 0
