@@ -820,7 +820,7 @@ export function suggestMainMarket(g) {
   if (profile === "corner_dominant" || profile === "corner_heavy") {
     // Sempre exibir mercado de cantos para estes perfis
     const cantHFav = fav.cantFavHT;
-    const thresholdCantos = (fav.afFav > 80) ? 3.8 : 4.5;
+    const thresholdCantos = (fav.afFav > 80) ? 4.2 : 5.0;
     const cvCantosLimit = 65; // Flexibilização para perfis de cantos
     
     if (cantHFav >= thresholdCantos && (g.cvCantosHT || 0) <= cvCantosLimit) {
@@ -835,7 +835,7 @@ export function suggestMainMarket(g) {
   // Prioridade: Cantos HT (se viável)
   if (profile === "corner_heavy") {
     const cantHFav = fav.cantFavHT;
-    const thresholdCantos = (fav.afFav > 80) ? 3.8 : 4.5;
+    const thresholdCantos = (fav.afFav > 80) ? 4.8 : 5.0;
     if (cantHFav >= thresholdCantos && (g.cvCantosHT || 0) <= 55) {
       return { label: `${fav.lado} ${fav.nome} — Over 3.5 Cantos HT`, axis: "cantos_ht", icon: "🚩", color: "#00c2ff" };
     }
@@ -900,7 +900,7 @@ export function suggestMainMarket(g) {
     case "corner_heavy": {
       const cantHFav = fav.cantFavHT;
       // Condição especial: afFav > 80 permite cantFavHT >= 3.8 [EMENDA v1.3]
-      const thresholdCantos = (fav.afFav > 80) ? 3.8 : 3.5;
+      const thresholdCantos = (fav.afFav > 80) ? 4.2 : 3.9;
       const cvCantosLimit = 65; // Flexibilização para perfis de cantos
       
       if (cantHFav >= thresholdCantos && (g.cvCantosHT || 0) <= cvCantosLimit)
@@ -958,7 +958,7 @@ export function suggestCombo(g) {
   if (profile === "corner_dominant" || profile === "corner_heavy") {
     // Cantos como primeira sugestão para perfis de cantos
     const cantHFav = fav.cantFavHT;
-    const thresholdCantos = (fav.afFav > 80) ? 3.8 : 3.5;
+    const thresholdCantos = (fav.afFav > 80) ? 4.2 : 3.9;
     const cvCantosLimit = 65; // Flexibilização para perfis de cantos
     
     if (cantHFav >= thresholdCantos && (g.cvCantosHT || 0) <= cvCantosLimit) {
@@ -1058,7 +1058,7 @@ export function suggestCombo(g) {
   const cant37Threshold = isCornerProfile ? 0.20 : 0.20;
   const cvCantosThreshold = isCornerProfile ? 65 : 55;
   
-  const thresholdCantos = (fav.afFav > 80) ? 3.8 : 3.5;
+  const thresholdCantos = (fav.afFav > 80) ? 4.2 : 3.9;
   if (main.axis !== "cantos_ht" && main.axis !== "cantos" && fav.cantFavHT >= thresholdCantos && favAppg >= appgThreshold && favCant37 >= cant37Threshold && (g.cvCantosHT || 0) <= cvCantosThreshold) {
     const perc4EscanteiosHT = g.percMais4EscanteiosHT || 0;
     const perc5EscanteiosHT = g.percMais5EscanteiosHT || 0;
@@ -1128,7 +1128,7 @@ export function suggestCombo(g) {
   }
 
   // Favorito vence
-  if (fav.afDiff >= 30 && !["fav_gols", "golsHT_fav"].includes(main.axis))
+  if (fav.afDiff >= 40 && !["fav_gols", "golsHT_fav"].includes(main.axis))
     cands.push({ label: `${fav.lado} ${fav.nome} Vence`, axis: "fav", icon: "⭐" });
 
   // 🚪 RETORNO COMPLETO - Sem limitadores de quantidade [AJUSTE DE CAPTAÇÃO]

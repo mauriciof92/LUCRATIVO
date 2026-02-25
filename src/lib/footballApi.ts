@@ -250,7 +250,7 @@ async function fetchShotsHTFromApi(
   apiKey: string
 ): Promise<{ shotsHTHome: number; shotsHTAway: number } | null> {
   try {
-    const data = await apiFetch(`/fixtures/statistics?fixture=${fixtureId}&half=1`, apiKey);
+    const data = await apiFetch(`/fixtures/statistics?fixture=${fixtureId}&half=true`, apiKey);
     const stats: any[] = data.response ?? [];
     if (!stats.length) return null;
 
@@ -265,7 +265,7 @@ async function fetchShotsHTFromApi(
 
     const shotsHTHome = getVal(homeId, "Shots on Goal");
     const shotsHTAway = getVal(awayId, "Shots on Goal");
-    console.log(`[API-Football] Shots HT half=1 fixture=${fixtureId}: home=${shotsHTHome} away=${shotsHTAway}`);
+    console.log(`[API-Football] Shots HT half=true fixture=${fixtureId}: home=${shotsHTHome} away=${shotsHTAway}`);
     return { shotsHTHome, shotsHTAway };
   } catch {
     return null;
