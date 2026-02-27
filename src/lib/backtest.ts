@@ -337,7 +337,7 @@ function resolveWithRealStats(label: string, real: RealStats): "win" | "lose" | 
   // Verificar se dados HT são null, undefined ou 0
   const isShotsDataAbsent = real.shotsHTFav === null || real.shotsHTFav === undefined || real.shotsHTFav === 0;
   const isCornersDataAbsent = (nl.includes("canto") || nl.includes("escanteio")) && 
-    (real.cornersHTFav === null || real.cornersHTFav === undefined || real.cornersHTFav === 0);
+    (real.cornersHTFav === null || real.cornersHTFav === undefined);
 
   // Finalizações HT (shots on goal by favorite in 1st half)
   if (nl.includes("finalizac") || nl.includes("chute")) {

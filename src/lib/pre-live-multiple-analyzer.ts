@@ -1,6 +1,21 @@
 import { parseCSV, getOddForLabel, classifyProfile, getFavorito, computeConfidence, computeScore, calculateValueBet, getMinOddForLabel, suggestMainMarket, suggestCombo, detectPoisonTriggers, suggestBetBuilder, extractDateFromHour } from "../engine";
 import type { PreMatchOdds } from "./footballApi";
 
+// ── FUNÇÕES POISSON ─────────────────────────────────────────────────────────────
+function factorial(n: number): number {
+  if (n <= 1) return 1;
+  return n * factorial(n - 1);
+}
+
+function poissonProb(lambda: number, k: number): number {
+  // P(X > k) = probabilidade de superar a linha k
+  let cdf = 0;
+  for (let i = 0; i <= Math.floor(k); i++) {
+    cdf += Math.pow(lambda, i) * Math.exp(-lambda) / factorial(i);
+  }
+  return 1 - cdf;
+}
+
 // ── CONSTANTES DE QUALIDADE ──────────────────────────────────────────────────
 const MIN_MARKET_ODD = 1.10;  // Odd mínima por mercado individual (SGP)
 const MAX_MARKET_ODD = 2.50;  // Odd máxima por mercado individual
@@ -16,6 +31,7 @@ const TIER_CONFIG: Record<string, { nGames: number; minGames: number; marketsPer
   agressivo: { nGames: 6, minGames: 5, marketsPerGame: 1, stake: 15, minTotal: 4.0,  maxTotal: 40.0 },
   bingo:     { nGames: 8, minGames: 6, marketsPerGame: 1, stake: 10, minTotal: 5.0,  maxTotal: 80.0 },
   sinfonia:  { nGames: 2, minGames: 2, marketsPerGame: 6, stake: 20, minTotal: 1.5,  maxTotal: 20.0 }, // 🆕 Sinfonia: teto teórico=6; cap real é dinâmico por qualidade do jogo
+  ftbox:     { nGames: 3, minGames: 2, marketsPerGame: 2, stake: 25, minTotal: 2.0,  maxTotal: 15.0 }, // 🆕 FT Box: foco em mercados FT de time
 };
 // Qualidade mínima por jogo (gate de entrada)
 const MIN_SCORE = 0.55;  // Score ≥ 55%
@@ -23,7 +39,7 @@ const MIN_CONF  = 0.45;  // Confiança ≥ 45%
 
 export interface LiveMultipleSuggestion {
   id: string;
-  type: "bronze" | "silver" | "gold" | "agressivo" | "bingo" | "sinfonia";
+  type: "bronze" | "silver" | "gold" | "agressivo" | "bingo" | "sinfonia" | "ftbox";
   confidence: number;
   expectedValue: number;
   riskLevel: "low" | "medium" | "high";
@@ -73,7 +89,15 @@ export class PreLiveMultipleAnalyzer {
     "Europa Conference League",
     "Pro League",
     "Eerste Divisie",
-    "Super Lig"
+    "Super Lig",
+    "Ligue 2"
+  ];
+
+  // 🆕 Campeonatos que não devem ter finalizações FT sugeridas
+  private excludedLeaguesForFT: string[] = [
+    "Eerste Divisie",
+    "Ligue 2",
+    // Adicionar outros campeonatos conforme necessidade
   ];
 
   constructor() {
@@ -90,6 +114,13 @@ export class PreLiveMultipleAnalyzer {
   // ✅ Verifica se o campeonato permite finalizações HT
   private allowsHTFinalizations(league: string): boolean {
     return !this.excludedLeaguesForHT.some(excluded => 
+      league.toLowerCase().includes(excluded.toLowerCase())
+    );
+  }
+
+  // 🆕 Verifica se o campeonato permite finalizações FT
+  private allowsFTFinalizations(league: string): boolean {
+    return !this.excludedLeaguesForFT.some(excluded => 
       league.toLowerCase().includes(excluded.toLowerCase())
     );
   }
@@ -151,6 +182,8 @@ export class PreLiveMultipleAnalyzer {
     const l = label.toLowerCase();
     if ((l.includes('finaliz') || l.includes('chute')) && l.includes('ht')) return 'chutes_ht';
     if ((l.includes('canto') || l.includes('escanteio')) && l.includes('ht')) return 'cantos_ht';
+    if ((l.includes('finaliz') || l.includes('chute')) && l.includes('ft')) return 'chutes_ft'; // 🆕
+    if ((l.includes('canto') || l.includes('escanteio')) && l.includes('ft')) return 'cantos_ft'; // 🆕
     if (l.includes('canto') || l.includes('escanteio')) return 'cantos';
     if (l.includes('ambas marcam') || l.includes('btts')) return 'btts';
     if (l.includes('under')) return 'under';
@@ -209,6 +242,9 @@ export class PreLiveMultipleAnalyzer {
     if ((l.includes('canto') || l.includes('escanteio')) && l.includes('ht')) return 30;
     if ((l.includes('finaliz') || l.includes('chute')) && l.includes('ht')) return 20;
     if (l.includes('blitz')) return 20;
+    // 🆕 Tier 7: Mercados FT seguros (prioridade mínima)
+    if ((l.includes('finaliz') || l.includes('chute')) && l.includes('ft')) return 15;
+    if ((l.includes('canto') || l.includes('escanteio')) && l.includes('ft')) return 10;
     return 40;
   }
 
@@ -243,7 +279,11 @@ export class PreLiveMultipleAnalyzer {
     const l = label.toLowerCase();
     const isHT = l.includes('finaliza') || l.includes('chute') ||
       ((l.includes('canto') || l.includes('escanteio')) && l.includes('ht'));
+    const isFT = l.includes('ft') && (l.includes('chute') || l.includes('canto') || l.includes('escanteio'));
+    
     if (isHT && !this.allowsHTFinalizations(league)) return false;
+    if (isFT && !this.allowsFTFinalizations(league)) return false;  // 🆕 Verificação FT
+    
     return true;
   }
 
@@ -254,11 +294,55 @@ export class PreLiveMultipleAnalyzer {
     return true;
   }
 
-  // 🎯 Extrai MÚLTIPLOS mercados complementares de eixos diferentes para um jogo (Bet Builder)
+  // � Gera mercados FT seguros baseados em projeção HT
+  private generateFTSafeMarkets(game: any): any[] {
+    const profile = classifyProfile(game);
+    const fav = getFavorito(game);
+    const ftMarkets: any[] = [];
+    
+    // Apenas para perfis relevantes
+    if (!['corner_heavy', 'chutes_ht_fav'].includes(profile)) {
+      return ftMarkets;
+    }
+    
+    // CHUTES FT
+    if (fav.chFavGol >= 5.5) {
+      const threshold = fav.chFavGol >= 7.0 ? 11.5 : 9.5;
+      const safetyMargin = fav.chFavGol - (threshold - 4); // margem acima do corte
+      ftMarkets.push({
+        label: `${fav.nome} — Over ${threshold} Chutes FT`,
+        axis: 'chutes_ft',
+        odd: 1.70,        // ← ADICIONAR odd padrão
+        safetyMargin,
+        source: 'ft_projection',
+      });
+    }
+    
+    // CANTOS FT
+    if (fav.cantFavHT >= 8.0) {
+      const threshold = fav.cantFavHT >= 10.0 ? 5.5 : 4.5;
+      const safetyMargin = fav.cantFavHT - (threshold - 2); // margem acima do corte
+      ftMarkets.push({
+        label: `${fav.nome} — Over ${threshold} Cantos FT`,
+        axis: 'cantos_ft',
+        odd: 1.85,        // ← ADICIONAR odd padrão
+        safetyMargin,
+        source: 'ft_projection',
+      });
+    }
+    
+    return ftMarkets;
+  }
+
+  // � Extrai MÚLTIPLOS mercados complementares de eixos diferentes para um jogo (Bet Builder)
   // ticketAxes: eixos já usados por outros jogos no bilhete — penaliza repetição
   private getGameMarkets(game: any, usedSigs: Set<string>, maxMarkets: number, ticketAxes?: Set<string>, isSinfonia: boolean = false): any[] {
     const combo = isSinfonia ? (suggestBetBuilder(game) || []) : (suggestCombo(game) || []);
     const main = suggestMainMarket(game);
+    
+    // 🆕 Adicionar mercados FT seguros
+    const ftMarkets = this.generateFTSafeMarkets(game);
+    
     const allCandidates: any[] = [];
     
     if (isSinfonia) {
@@ -268,6 +352,9 @@ export class PreLiveMultipleAnalyzer {
       if (main?.label) allCandidates.push(main);
       allCandidates.push(...combo);
     }
+
+    // 🆕 Adicionar FT markets ao final (prioridade menor)
+    allCandidates.push(...ftMarkets);
 
     // Ordenar: Sinfonia mantém ordem do engine; Clássicas priorizam mercados tradicionais
     if (!isSinfonia) {
@@ -318,6 +405,7 @@ export class PreLiveMultipleAnalyzer {
       confluencePairs: number;
       avgConfidence: number;
     };
+    ftBoxCandidates?: any[];
   } {
     try {
       const { games } = parseCSV(csvText);
@@ -382,7 +470,9 @@ export class PreLiveMultipleAnalyzer {
           qualityGames: qualityGames.length,
           confluencePairs: suggestions.length,
           avgConfidence: suggestions.reduce((acc, s) => acc + s.confidence, 0) / suggestions.length || 0
-        }
+        },
+        // 🆕 Adicionar ftBoxCandidates para o construtor manual
+        ftBoxCandidates: this.getFTBoxCandidates(qualityGames)
       };
     } catch (error) {
       console.error(' Erro na análise pré-live:', error);
@@ -393,7 +483,8 @@ export class PreLiveMultipleAnalyzer {
           qualityGames: 0,
           confluencePairs: 0,
           avgConfidence: 0
-        }
+        },
+        ftBoxCandidates: []
       };
     }
   }
@@ -570,6 +661,10 @@ export class PreLiveMultipleAnalyzer {
 
     const bingo = buildSGPTicket('bingo', 'high', '💣 Bingo');
     if (bingo) suggestions.push(bingo);
+
+    // 🆕 3️⃣ Box FT Dominância gerado por último
+    const ftBox = this.buildFTBox(topGames);
+    if (ftBox) suggestions.push(ftBox);
 
     return suggestions;
   }
@@ -770,12 +865,306 @@ export class PreLiveMultipleAnalyzer {
   
     return null;
   }
+
+  // 🆕 Extrair candidatos FT Box para o construtor manual
+  private getFTBoxCandidates(qualityGames: any[]): any[] {
+    const ftBoxCandidates: any[] = [];
+    
+    for (const game of qualityGames) {
+      const fav = getFavorito(game);
+      const gameMarkets: any[] = [];
+      
+      // 🆕 Verificar se liga permite FT
+      if (!this.allowsFTFinalizations(game.league || '')) {
+        console.log(`[FTBOX-EXCLUDE] ${game.league} não permite FT - pulando ${fav.nome}`);
+        continue;
+      }
+      
+      // 🆕 Log extra para verificar dados de cantos
+      console.log(`[FTBOX-PAIR] ${fav.nome}: chFavGol=${fav.chFavGol}, cantFavHT=${fav.cantFavHT}`);
+      
+      // CHUTES FT
+      if (fav.chFavGol >= 4.0) {
+        const lambdaChutes = fav.chFavGol * 1.8;
+        const thresholdChutes = fav.chFavGol >= 6.0 ? 11.5 : 9.5;
+        const probChutes = poissonProb(lambdaChutes, thresholdChutes);
+        
+        if (probChutes >= 0.60) {
+          gameMarkets.push({
+            label: `${fav.nome} — Over ${thresholdChutes} Chutes FT`,
+            axis: 'chutes_ft',
+            odd: 1.70,
+            prob: probChutes,
+            gold: probChutes >= 0.80,
+          });
+        }
+      }
+      
+      // CANTOS FT
+      if (fav.cantFavHT >= 3.0) {
+        const lambdaCantos = fav.cantFavHT * 1.6;
+        const thresholdCantos = fav.cantFavHT >= 7.5 ? 4.5 : 3.5;
+        const probCantos = poissonProb(lambdaCantos, thresholdCantos);
+        
+        if (probCantos >= 0.60) {
+          gameMarkets.push({
+            label: `${fav.nome} — Over ${thresholdCantos} Cantos FT`,
+            axis: 'cantos_ft',
+            odd: 1.85,
+            prob: probCantos,
+            gold: probCantos >= 0.80,
+          });
+        }
+      }
+      
+      if (gameMarkets.length >= 1) {
+        const scoreResult = computeScore(game);
+        const score = typeof scoreResult === 'number' ? scoreResult : scoreResult?.score || 0;
+        
+        ftBoxCandidates.push({
+          game,
+          markets: gameMarkets,
+          score,
+          goldCount: gameMarkets.filter(m => m.gold).length,
+        });
+      }
+    }
+    
+    return ftBoxCandidates;
+  }
+
+  // 🆕 CONSTRÓI BOX FT DOMINÂNCIA
+  private buildFTBox(qualityGames: any[]): LiveMultipleSuggestion | null {
+    // Candidatos ao Box FT
+    const ftBoxCandidates: any[] = [];
+
+    for (const game of qualityGames) {
+      const fav = getFavorito(game);
+      if (!fav?.nome) continue;
+
+      // 🆕 Verificar se liga permite FT
+      if (!this.allowsFTFinalizations(game.league || '')) {
+        console.log(`[FTBOX-AUTO-EXCLUDE] ${game.league} não permite FT - pulando ${fav.nome}`);
+        continue;
+      }
+
+      const gameMarkets: any[] = [];
+
+      // CHUTES FT — só se chFavGol >= 4.0 (reduzido para teste)
+      if (fav.chFavGol >= 4.0) {
+        const lambdaChutes = fav.chFavGol * 1.8; // projeção FT
+        const thresholdChutes = fav.chFavGol >= 6.0 ? 11.5 : 9.5;
+        const probChutes = poissonProb(lambdaChutes, thresholdChutes);
+
+        console.log(`[SGP-ftbox-debug] ${fav.nome}: chFavGol=${fav.chFavGol}, lambda=${lambdaChutes.toFixed(1)}, threshold=${thresholdChutes}, prob=${(probChutes*100).toFixed(0)}%`);
+
+        if (probChutes >= 0.60) { // reduzido para teste
+          gameMarkets.push({
+            label: `${fav.nome} — Over ${thresholdChutes} Chutes FT`,
+            axis: 'chutes_ft',
+            odd: 1.70,
+            prob: probChutes,
+            gold: probChutes >= 0.80,
+          });
+        }
+      }
+
+      // CANTOS FT — threshold reduzido para 3.0 (teste)
+      if (fav.cantFavHT >= 3.0) {
+        const lambdaCantos = fav.cantFavHT * 1.6; // projeção FT
+        const thresholdCantos = fav.cantFavHT >= 7.5 ? 4.5 : 3.5;
+        const probCantos = poissonProb(lambdaCantos, thresholdCantos);
+
+        console.log(`[SGP-ftbox-debug] ${fav.nome}: cantFavHT=${fav.cantFavHT}, lambda=${lambdaCantos.toFixed(1)}, threshold=${thresholdCantos}, prob=${(probCantos*100).toFixed(0)}%`);
+
+        if (probCantos >= 0.60) { // reduzido para teste
+          gameMarkets.push({
+            label: `${fav.nome} — Over ${thresholdCantos} Cantos FT`,
+            axis: 'cantos_ft',
+            odd: 1.85,
+            prob: probCantos,
+            gold: probCantos >= 0.80,
+          });
+        }
+      }
+
+      // Jogo entra no box se tem ao menos 1 mercado FT aprovado
+      if (gameMarkets.length >= 1) {
+        ftBoxCandidates.push({
+          game,
+          markets: gameMarkets,
+          score: game.score ?? 0,
+          goldCount: gameMarkets.filter(m => m.gold).length,
+          hasBoth: gameMarkets.length >= 2, // 🆕 tem ambos os mercados
+        });
+      }
+    }
+
+    // 🆕 Ordenar: 1) Ambos mercados, 2) Só chutes, 3) Só cantos
+    ftBoxCandidates.sort((a, b) => {
+      // Prioridade 1: jogos com ambos os mercados
+      if (a.hasBoth && !b.hasBoth) return -1;
+      if (!a.hasBoth && b.hasBoth) return 1;
+      
+      // Prioridade 2: mais mercados OURO
+      if (b.goldCount !== a.goldCount) return b.goldCount - a.goldCount;
+      
+      // Prioridade 3: maior score
+      return b.score - a.score;
+    });
+
+    // Máximo 1 jogo por partida (não 2 mercados do mesmo jogo)
+    const usedFixtures = new Set<string>();
+    const ftBoxGames: any[] = [];
+
+    for (const candidate of ftBoxCandidates) {
+      const fixtureKey = candidate.game.homeTeam + candidate.game.awayTeam;
+      if (usedFixtures.has(fixtureKey)) continue;
+      usedFixtures.add(fixtureKey);
+      ftBoxGames.push(candidate);
+      if (ftBoxGames.length >= 3) break;
+    }
+
+    // Montar bilhete com jogos selecionados e controle de eixos
+    const usedAxesFTBox = new Set<string>();
+    const finalSelections: any[] = [];
+    
+    // Adicionar mercados com controle de eixos (máximo 1 de cada tipo)
+    for (const candidate of ftBoxGames) {
+      if (finalSelections.length >= 3) break;
+      
+      // Adicionar até 2 mercados por jogo, respeitando eixos
+      let addedMarkets = 0;
+      for (const market of candidate.markets) {
+        if (finalSelections.length >= 3) break;
+        if (addedMarkets >= 2) break; // máximo 2 por jogo
+        if (usedAxesFTBox.has(market.axis)) continue;
+        
+        usedAxesFTBox.add(market.axis);
+        finalSelections.push({
+          ...candidate,
+          selectedMarket: market
+        });
+        addedMarkets++;
+      }
+    }
+
+    if (finalSelections.length >= 2) {
+      const allMarkets = finalSelections.map(s => s.selectedMarket);
+      const totalOdd = allMarkets.reduce((acc, m) => acc * m.odd, 1);
+      const stake = 25.00;
+
+      const selections = finalSelections.map(s => {
+        const m = s.selectedMarket;
+        return {
+          match: s.game.match || `${s.game.home} x ${s.game.away}`.trim(),
+          league: s.game.league || "—",
+          hour: s.game.hour || "—",
+          market: m.label,
+          odd: m.odd,
+          minOdd: m.odd * 0.9, // estimativa conservadora
+          hasValue: m.gold,
+          edge: m.prob * 100 - 50, // edge baseado na probabilidade
+          recommendation: m.gold ? "Forte" : "Moderado",
+          reason: `Prob ${(m.prob * 100).toFixed(0)}% ${m.gold ? '🥇 OURO' : ''}`,
+          gameProfile: classifyProfile(s.game) || "generic",
+          confidence: Math.round(m.prob * 100),
+        };
+      });
+
+      console.log(`[SGP-ftbox] ✅ ${finalSelections.length} jogos | odd=${totalOdd.toFixed(2)}`);
+      finalSelections.forEach(s => {
+        const m = s.selectedMarket;
+        console.log(`[SGP-ftbox]    → ${m.label} @ ${m.odd} | prob=${(m.prob*100).toFixed(0)}% ${m.gold ? '🥇 OURO' : ''}`);
+      });
+
+      return {
+        id: `ftbox-${Date.now()}`,
+        type: 'ftbox',
+        confidence: selections.reduce((acc, s) => acc + s.confidence, 0) / selections.length,
+        expectedValue: selections.reduce((acc, s) => acc + (s.edge / 100), 0) / selections.length,
+        riskLevel: totalOdd <= 6 ? 'low' : 'medium',
+        selections,
+        combinedOdd: parseFloat(totalOdd.toFixed(2)),
+        suggestedStake: stake,
+        expectedReturn: parseFloat((totalOdd * stake).toFixed(2)),
+        riskReward: totalOdd <= 6 ? 'Excelente' : 'Bom',
+      };
+    } else {
+      console.log(`[SGP-ftbox] ❌ Apenas ${ftBoxCandidates.length} jogo(s) qualificados com mercados FT — mínimo 2`);
+      console.log(`[SGP-ftbox] 📊 ftBoxCandidates.length=${ftBoxCandidates.length}, finalSelections.length=${finalSelections?.length || 0}`);
+      return null;
+    }
+  }
+
+  // 🆕 CONSTRÓI BOX FT PERSONALIZADO (sem verificação de conflitos externos)
+  buildCustomFTBox(selectedGames: any[], selectedMarketsData: any[]): LiveMultipleSuggestion | null {
+    if (selectedGames.length < 2 || selectedMarketsData.length < 2) {
+      console.log(`[SGP-ftbox-custom] ❌ Jogos insuficientes: ${selectedGames.length} jogos, ${selectedMarketsData.length} mercados`);
+      return null;
+    }
+
+    // Montar seleções personalizadas
+    const selections = selectedMarketsData.map(({ game, marketType }) => {
+      const fav = getFavorito(game);
+      let marketLabel = '';
+      let odd = 1.70;
+
+      if (marketType === 'chutes_ft') {
+        const threshold = fav.chFavGol >= 6.0 ? 11.5 : 9.5;
+        marketLabel = `${fav.nome} — Over ${threshold} Chutes FT`;
+        odd = 1.70;
+      } else if (marketType === 'cantos_ft') {
+        const threshold = fav.cantFavHT >= 7.5 ? 4.5 : 3.5;
+        marketLabel = `${fav.nome} — Over ${threshold} Cantos FT`;
+        odd = 1.85;
+      }
+
+      return {
+        match: game.match || `${game.home} x ${game.away}`,
+        league: game.league || "—",
+        hour: game.hour || "—",
+        market: marketLabel,
+        odd,
+        minOdd: odd * 0.9,
+        hasValue: true,
+        edge: 15, // estimativa
+        recommendation: "Personalizado",
+        reason: "Box FT Personalizado",
+        gameProfile: classifyProfile(game) || "generic",
+        confidence: 75,
+      };
+    });
+
+    // Calcular odd total
+    const totalOdd = selections.reduce((acc, s) => acc * s.odd, 1);
+    const stake = 25.00;
+
+    console.log(`[SGP-ftbox-custom] ✅ ${selectedGames.length} jogos | odd=${totalOdd.toFixed(2)}`);
+    selections.forEach(s => {
+      console.log(`[SGP-ftbox-custom]    → ${s.market} @ ${s.odd}`);
+    });
+
+    return {
+      id: `ftbox-custom-${Date.now()}`,
+      type: 'ftbox',
+      confidence: selections.reduce((acc, s) => acc + s.confidence, 0) / selections.length,
+      expectedValue: 0.15, // estimativa
+      riskLevel: totalOdd <= 6 ? 'low' : 'medium',
+      selections,
+      combinedOdd: parseFloat(totalOdd.toFixed(2)),
+      suggestedStake: stake,
+      expectedReturn: parseFloat((totalOdd * stake).toFixed(2)),
+      riskReward: totalOdd <= 6 ? 'Excelente' : 'Bom',
+    };
+  }
 }
 
 // Função principal para análise pré-live
 export function analyzePreLiveMultiples(csvText: string): {
   suggestions: LiveMultipleSuggestion[];
   summary: any;
+  ftBoxCandidates?: any[];
 } {
   const analyzer = new PreLiveMultipleAnalyzer();
   return analyzer.analyzeLiveMultiples(csvText);

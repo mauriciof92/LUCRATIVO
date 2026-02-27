@@ -98,6 +98,11 @@ async function apiFetch(path: string, apiKey: string, attempt = 0): Promise<any>
   if (!res.ok) throw new Error(`API-Football ${res.status}: ${path}`);
   const data = await res.json();
 
+  // 🆕 LOGS DE DIAGNÓSTICO - Rate Limits
+  const rateLimitDaily = res.headers.get('x-ratelimit-requests-remaining');
+  const rateLimitMinute = res.headers.get('X-RateLimit-Remaining');
+  console.log(`[RATE-LIMIT] ${path}: daily=${rateLimitDaily} minute=${rateLimitMinute}`);
+
   // Handle rate limit: retry up to 3 times with exponential backoff
   const rateErr = data.errors?.rateLimit ?? data.errors?.requests;
   if (rateErr && attempt < 3) {
@@ -200,15 +205,35 @@ async function fetchHalfTimeEvents(
   const totalFTHome = getStatVal(homeId, "Total Shots");      // shots_on_goal + shots_off_goal
   const totalFTAway = getStatVal(awayId, "Total Shots");      // shots_on_goal + shots_off_goal
 
-  // Use events corners for HT
-  for (const e of events) {
-    if (!isHT(e)) continue;
-    const tid = e.team?.id;
-    const type = (e.type ?? "").toLowerCase();
-    if (type === "corner") {
-      if (tid === homeId) cornersHTHome++;
-      else if (tid === awayId) cornersHTAway++;
-    }
+  // Buscar cantos HT via statistics (igual ao chutes HT)
+  const cornerStats = await apiFetch(
+    `/fixtures/statistics?fixture=${fixtureId}&half=true`, apiKey
+  );
+  const cornerData: any[] = cornerStats.response ?? [];
+  
+  // 🆕 LOG DE DIAGNÓSTICO - Corners Response
+  console.log(`[CORNERS-RAW] fixture=${fixtureId} half=true: stats=${cornerData.length} teams=${cornerData.map(s => s.team?.id).join(',')}`);
+  
+  if (cornerData.length) {
+    const getCorner = (teamId: number): number => {
+      const ts = cornerData.find((s: any) => s.team?.id === teamId);
+      if (!ts) return 0;
+      const stat = (ts.statistics ?? []).find(
+        (s: any) => s.type === 'Corner Kicks'
+      );
+      const v = stat?.value;
+      if (v === null || v === undefined) return 0;
+      return typeof v === 'number' ? v : parseInt(String(v), 10) || 0;
+    };
+    cornersHTHome = getCorner(homeId);
+    cornersHTAway = getCorner(awayId);
+    console.log(
+      `[API-Football] Corners HT half=true fixture=${fixtureId}: ` +
+      `home=${cornersHTHome} away=${cornersHTAway}` 
+    );
+  } else {
+    // 🆕 FALLBACK: Se API não retornar dados HT, usar 0 (será tratado como "avg" no backtest)
+    console.log(`[FALLBACK] API sem dados HT para fixture=${fixtureId}, usando cornersHT=0/0`);
   }
 
   // 🆕 Log de validação - Exibir objeto completo da API para auditoria
@@ -252,7 +277,15 @@ async function fetchShotsHTFromApi(
   try {
     const data = await apiFetch(`/fixtures/statistics?fixture=${fixtureId}&half=true`, apiKey);
     const stats: any[] = data.response ?? [];
-    if (!stats.length) return null;
+    
+    // 🆕 LOG DE DIAGNÓSTICO - Statistics Response
+    console.log(`[STATS-RAW] fixture=${fixtureId} half=true: stats=${stats.length} teams=${stats.map(s => s.team?.id).join(',')}`);
+    
+    if (!stats.length) {
+      // 🆕 FALLBACK: Se API não retornar dados HT, retornar null (será tratado como "avg")
+      console.log(`[FALLBACK] API sem dados HT para fixture=${fixtureId}, usando shotsHT=0/0`);
+      return null;
+    }
 
     const getVal = (teamId: number, type: string): number => {
       const ts = stats.find((s: any) => s.team?.id === teamId);
@@ -310,6 +343,9 @@ export async function fetchRealStatsForMatches(
       if (combined > bestScore && combined >= 0.42) { bestScore = combined; bestFixture = f; }
     }
 
+    // 🆕 LOG DE DIAGNÓSTICO - Fixture Matching
+    console.log(`[MATCHING] ${match.homeTeam} vs ${match.awayTeam} → fixture: ${bestFixture?.id || 'NOT FOUND'} (score: ${bestScore.toFixed(2)})`);
+
     // Usar apenas API-Football — sem SofaScore
     if (!bestFixture) continue; // sem fixture encontrado, pular
 
@@ -326,7 +362,11 @@ export async function fetchRealStatsForMatches(
     const shotsHTHome = hasShotsData ? shotsData!.shotsHTHome : 0;
     const shotsHTAway = hasShotsData ? shotsData!.shotsHTAway : 0;
 
-    console.log(`[API-Football] RealStats ${match.homeTeam} vs ${match.awayTeam}: shotsHT=${shotsHTHome}/${shotsHTAway} corners=${htData?.cornersHTHome ?? 0}/${htData?.cornersHTAway ?? 0}`);
+    // 🆕 LOG DE FONTE DE DADOS
+    const shotsSource = hasShotsData ? "api" : "avg";
+    const cornersSource = hasApiData ? "api" : "avg";
+    
+    console.log(`[API-Football] RealStats ${match.homeTeam} vs ${match.awayTeam}: shotsHT=${shotsHTHome}/${shotsHTAway} corners=${htData?.cornersHTHome ?? 0}/${htData?.cornersHTAway ?? 0} [${shotsSource}/${cornersSource}]`);
 
     results.push({
       matchKey:        `${match.homeTeam}|${match.awayTeam}`,

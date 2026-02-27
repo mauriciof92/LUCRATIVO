@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useBacktest } from "../../hooks/useBacktest";
 import { NavHeader } from "../../components/NavHeader";
 import { Settings, Database, Trash2, Upload, Key, AlertTriangle } from "lucide-react";
+import { supabase } from "../../lib/supabase";
 
 import { C, KPI as SharedKPI } from "../../components/ui";
 
@@ -16,6 +17,8 @@ export default function AdminPage() {
     results,
     err,
     saveError,
+    enriching,
+    enrichErr,
     
     // Funções do hook
     handleImport,
@@ -85,20 +88,95 @@ export default function AdminPage() {
   };
 
   const handleClearDatabase = async () => {
-    if (!confirm("⚠️ ATENÇÃO: Isso apagará TODOS os dados do banco. Continuar?")) {
+    if (!confirm("⚠️ ATENÇÃO: Isso limpará a base mantendo apenas os últimos 3 dias. Continuar?")) {
       return;
     }
     
     setClearing(true);
     try {
-      // TODO: Implementar limpeza do Supabase
-      console.log("[ADMIN] Limpando banco de dados...");
-      await handleClear();
+      console.log("[ADMIN] Iniciando limpeza da base de dados...");
+      await cleanupDatabase();
+      alert("✅ Base de dados limpa com sucesso! Mantidos apenas os últimos 3 dias.");
     } catch (error) {
       console.error("[ADMIN] Erro ao limpar banco:", error);
+      alert("❌ Erro ao limpar banco. Verifique o console.");
     } finally {
       setClearing(false);
     }
+  };
+
+  // 🆕 Função de backup e limpeza do Supabase
+  const cleanupDatabase = async () => {
+    // 1. Backup dos dados atuais
+    console.log("[CLEANUP] Fazendo backup dos dados...");
+    const { data: allData, error: fetchError } = await supabase
+      .from('bet_results')
+      .select('*')
+      .order('created_at', { ascending: false });
+    
+    if (fetchError) throw fetchError;
+    
+    // Salvar backup localmente
+    const backupData = {
+      timestamp: new Date().toISOString(),
+      totalRecords: allData?.length || 0,
+      records: allData
+    };
+    
+    const blob = new Blob([JSON.stringify(backupData, null, 2)], 
+      { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `bet_results_backup_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    console.log(`[CLEANUP] Backup salvo: ${backupData.totalRecords} registros`);
+    
+    // 2. Calcular data limite (3 dias atrás)
+    const threeDaysAgo = new Date();
+    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+    const cutoffDate = threeDaysAgo.toISOString();
+    
+    // 3. Contar registros que serão removidos
+    const { count: oldCount, error: countError } = await supabase
+      .from('bet_results')
+      .select('*', { count: 'exact', head: true })
+      .lt('created_at', cutoffDate);
+    
+    if (countError) throw countError;
+    
+    console.log(`[CLEANUP] Serão removidos ${oldCount} registros anteriores a ${cutoffDate}`);
+    
+    // 4. Remover registros antigos
+    if (oldCount && oldCount > 0) {
+      const { error: deleteError } = await supabase
+        .from('bet_results')
+        .delete()
+        .lt('created_at', cutoffDate);
+      
+      if (deleteError) throw deleteError;
+      
+      console.log(`[CLEANUP] ✅ Removidos ${oldCount} registros antigos`);
+    }
+    
+    // 5. Verificar registros restantes
+    const { count: remainingCount, error: remainingError } = await supabase
+      .from('bet_results')
+      .select('*', { count: 'exact', head: true });
+    
+    if (remainingError) throw remainingError;
+    
+    console.log(`[CLEANUP] ✅ Restam ${remainingCount} registros (últimos 3 dias)`);
+    
+    return {
+      removed: oldCount,
+      remaining: remainingCount,
+      backupSaved: true
+    };
   };
 
   const handleSaveApiKey = () => {
@@ -381,6 +459,67 @@ export default function AdminPage() {
         </div>
       </div>
 
+      {/* 🆕 Enriquecimento Manual */}
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: "12px", padding: "24px", marginBottom: "24px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "20px" }}>
+          <Database size={20} color={C.accent} />
+          <h2 style={{ fontSize: "18px", fontWeight: 600, margin: 0, color: C.text }}>
+            Enriquecimento Manual
+          </h2>
+        </div>
+        
+        <div style={{ marginBottom: "16px" }}>
+          <div style={{ fontSize: "14px", color: C.muted, marginBottom: "12px" }}>
+            Forçar enriquecimento com API-Football para ver logs [FALLBACK] e diagnóstico.
+          </div>
+          
+          <button
+            onClick={async () => {
+              if (!confirm("⚠️ Isso irá enriquecer todos os jogos FT com dados da API. Continuar?")) return;
+              try {
+                const apiKey = localStorage.getItem('football-api-key');
+                if (!apiKey) {
+                  alert("❌ Configure API key primeiro!");
+                  return;
+                }
+                await enrichWithOdds(apiKey);
+                alert(`✅ Enriquecimento concluído! Verifique o console para logs [FALLBACK].`);
+              } catch (e: any) {
+                alert("❌ Erro: " + (e?.message ?? String(e)));
+              }
+            }}
+            disabled={enriching}
+            style={{
+              background: enriching ? C.gray : C.blue,
+              color: "white",
+              border: "none",
+              borderRadius: "8px",
+              padding: "12px 24px",
+              fontSize: "14px",
+              fontWeight: 600,
+              cursor: enriching ? "not-allowed" : "pointer",
+              width: "100%"
+            }}
+          >
+            {enriching ? '⏳ Enriquecendo...' : '🔄 Enrich with API (Ver Logs [FALLBACK])'}
+          </button>
+          
+          {enrichErr && (
+            <div style={{
+              padding: "12px",
+              background: "#450a0a",
+              border: `1px solid ${C.red}`,
+              borderRadius: "6px",
+              color: C.red,
+              fontSize: "13px",
+              marginTop: "12px"
+            }}>
+              ⚠️ {enrichErr}
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Teste de Conexão Supabase */}
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: "12px", padding: "24px", marginBottom: "24px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "20px" }}>
@@ -418,7 +557,7 @@ export default function AdminPage() {
       {/* Operações de Risco */}
       <div style={{ background: C.card, border: `2px solid ${C.red}`, borderRadius: "12px", padding: "24px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "20px" }}>
-          <AlertTriangle size={20} color={C.red} />
+          <Database size={20} color={C.red} />
           <h2 style={{ fontSize: "18px", fontWeight: 600, margin: 0, color: C.red }}>
             Operações de Risco
           </h2>
@@ -426,28 +565,25 @@ export default function AdminPage() {
         
         <div style={{ marginBottom: "16px" }}>
           <div style={{ fontSize: "14px", color: C.muted, marginBottom: "12px" }}>
-            ⚠️ Estas operações são irreversíveis e afetarão todos os dados do sistema.
+            🆕 Limpar base de dados mantendo apenas os últimos 3 dias. Backup automático será baixado.
           </div>
           
           <button
             onClick={handleClearDatabase}
             disabled={clearing}
             style={{
-              padding: "8px 16px",
+              padding: "12px 24px",
               background: clearing ? C.gray : C.red,
               color: "white",
               border: "none",
-              borderRadius: "6px",
+              borderRadius: "8px",
               cursor: clearing ? "not-allowed" : "pointer",
               fontSize: "14px",
               fontWeight: 600,
-              display: "flex",
-              alignItems: "center",
-              gap: "8px"
+              width: "100%"
             }}
           >
-            <Trash2 size={16} />
-            {clearing ? "Limpando..." : "🗑️ Limpar Banco de Dados"}
+            {clearing ? '⏳ Limpando...' : '🗑️ Limpar Base (Últimos 3 Dias)'}
           </button>
         </div>
       </div>

@@ -14,6 +14,7 @@ const TICKET_STYLES: Record<string, { label: string; color: string; icon: string
   agressivo: { label: 'Agressivo', color: '#ff6b00', icon: '🚀' },
   bingo:     { label: 'Bingo',     color: '#ff1744', icon: '💣' },
   sinfonia:  { label: 'Sinfonia',  color: '#00e676', icon: '🐦' },
+  ftbox:     { label: 'Box FT',    color: '#ff9800', icon: '🔥' },
 };
 
 export default function MultipleAnalyzerPage() {
@@ -27,6 +28,13 @@ export default function MultipleAnalyzerPage() {
   const [unmatchedGames, setUnmatchedGames] = useState<any[]>([]);
   const [showUnmatchedDetails, setShowUnmatchedDetails] = useState(false);
   const [ignoredMatches, setIgnoredMatches] = useState<string[]>([]);
+
+  // 🆕 Estados para FT Box Personalizado
+  const [showFTBoxBuilder, setShowFTBoxBuilder] = useState(false);
+  const [selectedGames, setSelectedGames] = useState<Set<string>>(new Set());
+  const [selectedMarkets, setSelectedMarkets] = useState<Set<string>>(new Set());
+  const [customFTBox, setCustomFTBox] = useState<any>(null);
+  const [ftBoxCandidates, setFtBoxCandidates] = useState<any[]>([]);
 
   const analyzer = useMemo(() => new PreLiveMultipleAnalyzer(), []);
 
@@ -53,6 +61,8 @@ export default function MultipleAnalyzerPage() {
       const result = analyzer.analyzeLiveMultiples(text, undefined, undefined, ignoredMatches);
       setSuggestions(result.suggestions ?? []);
       setSummary(result.summary);
+      // 🆕 Guardar ftBoxCandidates para o construtor manual
+      setFtBoxCandidates(result.ftBoxCandidates ?? []);
       if ((result.suggestions ?? []).length === 0) {
         setError(`Nenhuma múltipla gerada. ${result.summary.totalGames} jogos no banco, ${result.summary.qualityGames} com qualidade suficiente (score≥65%, conf≥55%). Cada perna precisa de odd entre 1.20–2.50.`);
       }
@@ -61,6 +71,70 @@ export default function MultipleAnalyzerPage() {
     } finally {
       setAnalyzing(false);
     }
+  };
+
+  // 🆕 Gerar Box FT Personalizado
+  const handleGenerateCustomFTBox = async () => {
+    if (selectedGames.size < 2) {
+      setError('Selecione pelo menos 2 jogos para o Box FT.');
+      return;
+    }
+
+    const selectedGamesData = games.filter((g: any) => 
+      selectedGames.has(g.match || `${g.home} x ${g.away}`)
+    );
+
+    const selectedMarketsData = Array.from(selectedMarkets).map(marketKey => {
+      const [gameMatch, marketType] = marketKey.split('|');
+      const game = selectedGamesData.find((g: any) => 
+        (g.match || `${g.home} x ${g.away}`) === gameMatch
+      );
+      return { game, marketType };
+    }).filter(m => m.game);
+
+    try {
+      const customBox = analyzer.buildCustomFTBox(selectedGamesData, selectedMarketsData);
+      if (customBox) {
+        setCustomFTBox(customBox);
+        setError('');
+      } else {
+        setError('Não foi possível gerar o Box FT com as seleções atuais.');
+      }
+    } catch (e: any) {
+      setError('Erro ao gerar Box FT: ' + (e?.message ?? String(e)));
+    }
+  };
+
+  // 🆕 Obter mercados FT disponíveis para um jogo
+  const getFTMarketsForGame = (game: any) => {
+    const fav = (analyzer as any).getFavorito?.(game);
+    if (!fav) return [];
+
+    const markets = [];
+
+    // Chutes FT
+    if (fav.chFavGol >= 4.0) {
+      const threshold = fav.chFavGol >= 6.0 ? 11.5 : 9.5;
+      markets.push({
+        key: `${game.match || `${game.home} x ${game.away}`}|chutes_ft`,
+        label: `${fav.nome} — Over ${threshold} Chutes FT`,
+        axis: 'chutes_ft',
+        odd: 1.70,
+      });
+    }
+
+    // Cantos FT
+    if (fav.cantFavHT >= 5.5) {
+      const threshold = fav.cantFavHT >= 7.5 ? 4.5 : 3.5;
+      markets.push({
+        key: `${game.match || `${game.home} x ${game.away}`}|cantos_ft`,
+        label: `${fav.nome} — Over ${threshold} Cantos FT`,
+        axis: 'cantos_ft',
+        odd: 1.85,
+      });
+    }
+
+    return markets;
   };
 
   const handleFetchOdds = async () => {
@@ -156,77 +230,275 @@ export default function MultipleAnalyzerPage() {
               <div style={{ color: C.blue, fontSize: 20, fontWeight: 700 }}>{todayGames.length}</div>
             </div>
             <div>
-              <div style={{ color: C.muted, fontSize: 13, marginBottom: 4 }}>Status</div>
-              <div style={{ color: games.length > 0 ? C.green : C.gold, fontSize: 14, fontWeight: 600 }}>
-                {games.length > 0 ? '✅ Dados carregados' : '⚠️ Carregue no Admin'}
+              <div style={{ color: C.muted, fontSize: 13, marginBottom: 4 }}>Múltiplas Geradas</div>
+              <div style={{ color: C.green, fontSize: 20, fontWeight: 700 }}>{suggestions.length}</div>
+            </div>
+            <div>
+              <div style={{ color: C.muted, fontSize: 13, marginBottom: 4 }}>Box FT Personalizado</div>
+              <div style={{ color: customFTBox ? C.green : C.muted, fontSize: 20, fontWeight: 700 }}>
+                {customFTBox ? '✅' : '—'}
               </div>
             </div>
           </div>
-        </div>
 
-        {/* AÇÕES */}
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 24 }}>
-          <button
-            onClick={handleAnalyze}
-            disabled={analyzing || loadingOdds || games.length === 0}
-            style={{
-              background: analyzing || loadingOdds || games.length === 0 ? C.muted : C.blue,
-              color: '#000', border: 'none', borderRadius: 8,
-              padding: '12px 24px', fontSize: 14, fontWeight: 700,
-              cursor: (analyzing || loadingOdds || games.length === 0) ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {analyzing ? '⏳ Analisando...' : '🚀 Gerar Múltiplas'}
-          </button>
-
-          {suggestions.length > 0 && (
+          <div style={{ display: 'flex', gap: 12, marginTop: 20, flexWrap: 'wrap' }}>
             <button
-              onClick={handleFetchOdds}
-              disabled={loadingOdds}
+              onClick={handleAnalyze}
+              disabled={analyzing || !csvText}
               style={{
-                background: loadingOdds ? C.muted : C.gold,
-                color: '#000', border: 'none', borderRadius: 8,
-                padding: '12px 24px', fontSize: 14, fontWeight: 700,
-                cursor: loadingOdds ? 'not-allowed' : 'pointer',
+                background: analyzing ? C.muted : C.blue,
+                color: 'white', border: 'none', borderRadius: 6, padding: '10px 20px',
+                fontSize: 13, fontWeight: 600, cursor: analyzing ? 'not-allowed' : 'pointer',
               }}
             >
-              {loadingOdds ? '⏳ Buscando...' : '🎯 Buscar Odds Reais'}
+              {analyzing ? '⏳ Analisando...' : '🔍 Analisar Múltiplas'}
             </button>
-          )}
+
+            <button
+              onClick={() => setShowFTBoxBuilder(!showFTBoxBuilder)}
+              style={{
+                background: showFTBoxBuilder ? C.gold : C.surface,
+                color: showFTBoxBuilder ? 'white' : C.text,
+                border: `1px solid ${C.gold}`,
+                borderRadius: 6, padding: '10px 20px',
+                fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              }}
+            >
+              🔥 Box FT Personalizado
+            </button>
+
+            {suggestions.length > 0 && (
+              <button
+                onClick={handleFetchOdds}
+                disabled={loadingOdds}
+                style={{
+                  background: loadingOdds ? C.muted : C.green,
+                  color: 'white', border: 'none', borderRadius: 6, padding: '10px 20px',
+                  fontSize: 13, fontWeight: 600, cursor: loadingOdds ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {loadingOdds ? '⏳ Buscando odds...' : '💰 Odds Reais'}
+              </button>
+            )}
+
+            {ignoredMatches.length > 0 && (
+              <button
+                onClick={handleClearIgnored}
+                style={{
+                  background: 'transparent', border: `1px solid ${C.muted}`,
+                  borderRadius: 6, padding: '4px 10px', fontSize: 11,
+                  color: C.muted, cursor: 'pointer',
+                }}
+              >
+                🔄 Restaurar {ignoredMatches.length} jogo(s)
+              </button>
+            )}
+          </div>
         </div>
 
-        {/* ERROS */}
-        {error && (
-          <div style={{
-            background: '#450a0a', border: `1px solid ${C.red}`,
-            borderRadius: 8, padding: 16, marginBottom: 24,
-            color: C.red, fontSize: 14,
-          }}>
-            ⚠️ {error}
+        {/* 🆕 FT BOX BUILDER */}
+        {showFTBoxBuilder && (
+          <div style={{ background: C.surface, border: `2px solid ${C.gold}`, borderRadius: 12, padding: 24, marginBottom: 24 }}>
+            <h2 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 16px', color: C.gold }}>
+              🔥 Construtor de Box FT Personalizado
+            </h2>
+            <p style={{ color: C.muted, fontSize: 12, marginBottom: 20 }}>
+              Selecione 2-3 jogos e seus mercados FT. Este box ignora conflitos com outras múltiplas.
+            </p>
+
+            <div style={{ display: 'grid', gap: 16, maxHeight: 400, overflowY: 'auto' }}>
+              {ftBoxCandidates.map((candidate: any, i: number) => {
+                const game = candidate.game;
+                const gameKey = game.match || `${game.home} x ${game.away}`;
+                const isSelected = selectedGames.has(gameKey);
+                const ftMarkets = candidate.markets || [];
+
+                if (ftMarkets.length === 0) return null;
+
+                return (
+                  <div key={i} style={{
+                    background: isSelected ? `${C.gold}20` : 'transparent',
+                    border: `1px solid ${isSelected ? C.gold : C.border}`,
+                    borderRadius: 8, padding: 12,
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={(e) => {
+                          const newSelected = new Set(selectedGames);
+                          if (e.target.checked) {
+                            newSelected.add(gameKey);
+                          } else {
+                            newSelected.delete(gameKey);
+                            // Remover mercados deste jogo
+                            const marketsToRemove = Array.from(selectedMarkets).filter(m => m.startsWith(gameKey + '|'));
+                            marketsToRemove.forEach(m => selectedMarkets.delete(m));
+                          }
+                          setSelectedGames(newSelected);
+                        }}
+                        style={{ marginRight: 8 }}
+                      />
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>{gameKey}</span>
+                    </div>
+
+                    {isSelected && (
+                      <div style={{ marginLeft: 24, display: 'grid', gap: 6 }}>
+                        {ftMarkets.map((market: any) => {
+                          const isMarketSelected = selectedMarkets.has(market.key);
+                          const axisConflict = Array.from(selectedMarkets).some(m => {
+                            if (m === market.key) return false;
+                            const [, axis] = m.split('|');
+                            return axis === market.axis;
+                          });
+
+                          return (
+                            <div key={market.key} style={{ display: 'flex', alignItems: 'center' }}>
+                              <input
+                                type="checkbox"
+                                checked={isMarketSelected}
+                                disabled={axisConflict && !isMarketSelected}
+                                onChange={(e) => {
+                                  const newMarkets = new Set(selectedMarkets);
+                                  if (e.target.checked) {
+                                    // Remover outro mercado do mesmo eixo
+                                    const toRemove = Array.from(newMarkets).find(m => {
+                                      const [, axis] = m.split('|');
+                                      return axis === market.axis;
+                                    });
+                                    if (toRemove) newMarkets.delete(toRemove);
+                                    newMarkets.add(market.key);
+                                  } else {
+                                    newMarkets.delete(market.key);
+                                  }
+                                  setSelectedMarkets(newMarkets);
+                                }}
+                                style={{ marginRight: 8, width: 14, height: 14 }}
+                              />
+                              <span style={{
+                                fontSize: 12,
+                                color: axisConflict && !isMarketSelected ? C.muted : C.text,
+                                textDecoration: axisConflict && !isMarketSelected ? 'line-through' : 'none'
+                              }}>
+                                {market.label} @ {market.odd}
+                                {axisConflict && !isMarketSelected && ' (conflito)'}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 20, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 12, color: C.muted }}>
+                {selectedGames.size} jogo(s) selecionado(s) • {selectedMarkets.size} mercado(s)
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  onClick={() => {
+                    setSelectedGames(new Set());
+                    setSelectedMarkets(new Set());
+                    setCustomFTBox(null);
+                  }}
+                  style={{
+                    background: 'transparent', border: `1px solid ${C.muted}`,
+                    borderRadius: 6, padding: '8px 16px', fontSize: 12,
+                    color: C.muted, cursor: 'pointer',
+                  }}
+                >
+                  Limpar
+                </button>
+                <button
+                  onClick={handleGenerateCustomFTBox}
+                  disabled={selectedGames.size < 2 || selectedMarkets.size < 2 ? true : undefined}
+                  style={{
+                    background: selectedGames.size >= 2 && selectedMarkets.size >= 2 ? C.gold : C.muted,
+                    color: 'white', border: 'none', borderRadius: 6, padding: '8px 16px',
+                    fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                  }}
+                >
+                  Gerar Box FT
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
-        {/* RESUMO */}
-        {summary && (
-          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, marginBottom: 24 }}>
-            <h2 style={{ fontSize: 15, fontWeight: 600, margin: '0 0 16px' }}>📈 Resumo da Análise</h2>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 16 }}>
-              <div>
-                <div style={{ color: C.muted, fontSize: 13, marginBottom: 4 }}>Total de Jogos</div>
-                <div style={{ color: C.text, fontSize: 18, fontWeight: 700 }}>{summary.totalGames}</div>
-              </div>
-              <div>
-                <div style={{ color: C.muted, fontSize: 13, marginBottom: 4 }}>Qualidade</div>
-                <div style={{ color: C.green, fontSize: 18, fontWeight: 700 }}>{summary.qualityGames}</div>
-              </div>
-              <div>
-                <div style={{ color: C.muted, fontSize: 13, marginBottom: 4 }}>Múltiplas</div>
-                <div style={{ color: C.blue, fontSize: 18, fontWeight: 700 }}>{suggestions.length}</div>
-              </div>
-              <div>
-                <div style={{ color: C.muted, fontSize: 13, marginBottom: 4 }}>Taxa Média</div>
-                <div style={{ color: C.gold, fontSize: 18, fontWeight: 700 }}>
-                  {summary.avgOdds ? summary.avgOdds.toFixed(2) : 'N/A'}
+        {/* 🆕 BOX FT PERSONALIZADO */}
+        {customFTBox && (
+          <div style={{ marginBottom: 40 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: '#ff9800', display: 'flex', alignItems: 'center', gap: 8 }}>
+                🔥 Box FT Personalizado
+              </h2>
+            </div>
+            <div style={{ display: 'grid', gap: 16 }}>
+              <div key={customFTBox.id} style={{
+                background: C.surface, border: `2px solid #ff980040`,
+                borderRadius: 12, padding: 20, position: 'relative', overflow: 'hidden',
+              }}>
+                <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: '#ff9800' }} />
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#ff9800', marginBottom: 2 }}>
+                      🔥 Box FT Personalizado
+                    </div>
+                    <div style={{ color: C.muted, fontSize: 12 }}>
+                      {new Set(customFTBox.selections?.map((sel: any) => sel.match)).size} jogos · {customFTBox.selections?.length ?? 0} mercados · Stake R$ {customFTBox.suggestedStake?.toFixed(2) ?? '25.00'}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: 22, fontWeight: 700, color: '#ff9800' }}>
+                      {customFTBox.combinedOdd > 0 ? customFTBox.combinedOdd.toFixed(2) : '—'}
+                    </div>
+                    <div style={{ color: C.muted, fontSize: 11 }}>
+                      Retorno R$ {customFTBox.expectedReturn ? customFTBox.expectedReturn.toFixed(2) : '—'}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {Object.entries(
+                    customFTBox.selections?.reduce((acc: any, sel: any) => {
+                      if (!acc[sel.match]) acc[sel.match] = [];
+                      acc[sel.match].push(sel);
+                      return acc;
+                    }, {}) || {}
+                  ).map(([match, sels]: [string, any], j: number) => {
+                    const gameOdd = sels.reduce((acc: number, sel: any) => acc * (sel.odd > 1 ? sel.odd : 1), 1);
+                    return (
+                      <div key={j} style={{
+                        background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: 12,
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{match}</span>
+                          <span style={{ fontSize: 11, color: C.muted }}>Odd jogo: {gameOdd.toFixed(2)}</span>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          {sels.map((sel: any, k: number) => (
+                            <div key={k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span style={{ fontSize: 12, color: C.text }}>{sel.market}</span>
+                              <span style={{ fontSize: 12, fontWeight: 600, color: C.green }}>{sel.odd > 1 ? sel.odd.toFixed(2) : '—'}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
+                  <span style={{ fontSize: 12, color: C.muted }}>
+                    Risco: <strong style={{ color: customFTBox.riskLevel === 'low' ? C.green : customFTBox.riskLevel === 'high' ? C.red : C.gold }}>{customFTBox.riskLevel === 'low' ? 'Baixo' : customFTBox.riskLevel === 'high' ? 'Alto' : 'Médio'}</strong>
+                  </span>
+                  <span style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>
+                    {customFTBox.riskReward ?? ''}
+                  </span>
                 </div>
               </div>
             </div>

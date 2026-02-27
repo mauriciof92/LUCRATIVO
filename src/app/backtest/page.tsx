@@ -167,7 +167,7 @@ export default function BacktestPage() {
                                   <div>
                                     <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>Linhas combo:</div>
                                     {r.combo.map((c: any, ci: number) => (
-                                      <div key={ci} style={{
+                                      <div key={`${r.id}-combo-${ci}`} style={{
                                         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                                         padding: '4px 10px', background: C.card, borderRadius: 6, marginBottom: 4,
                                         border: `1px solid ${C.border}`,
