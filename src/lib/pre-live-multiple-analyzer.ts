@@ -288,10 +288,10 @@ export class PreLiveMultipleAnalyzer {
   }
 
   // Função auxiliar para calcular threshold dinâmico
-  private calcDynamicThreshold(lambda: number, lines: number[], minProb: number): number | null {
+  private calcDynamicThreshold(lambda: number, lines: number[], minProb: number, maxProb: number): number | null {
     for (const line of [...lines].reverse()) {
       const prob = poissonProb(lambda, line);
-      if (prob >= minProb) {
+      if (prob >= minProb && prob <= maxProb) {
         return line;
       }
     }
@@ -319,13 +319,13 @@ export class PreLiveMultipleAnalyzer {
     // CHUTES FT — linha dinâmica
     if (fav.chFavGol >= 5.5) {
       const lambda = fav.chFavGol * 1.8;
-      const linhasChutes = [7.5, 8.5, 9.5, 10.5, 11.5, 12.5];
+      const linhasChutes = [9.5, 10.5, 11.5, 12.5, 13.5, 14.5];
       
-      // Encontrar linha mais alta com prob >= 0.70
+      // Encontrar linha mais alta com prob entre 70-82%
       let bestThreshold = null;
       for (const linha of [...linhasChutes].reverse()) {
         const prob = poissonProb(lambda, linha);
-        if (prob >= 0.70) {
+        if (prob >= 0.70 && prob <= 0.82) {
           bestThreshold = { linha, prob };
           break;
         }
@@ -346,12 +346,12 @@ export class PreLiveMultipleAnalyzer {
     // CANTOS FT — linha dinâmica
     if (fav.cantFavHT >= 3.0) {
       const lambda = fav.cantFavHT * 1.6;
-      const linhasCantos = [2.5, 3.5, 4.5, 5.5];
+      const linhasCantos = [3.5, 4.5, 5.5, 6.5];
       
       let bestThreshold = null;
       for (const linha of [...linhasCantos].reverse()) {
         const prob = poissonProb(lambda, linha);
-        if (prob >= 0.70) {
+        if (prob >= 0.70 && prob <= 0.82) {
           bestThreshold = { linha, prob };
           break;
         }
@@ -923,7 +923,7 @@ export class PreLiveMultipleAnalyzer {
       // CHUTES FT
       if (fav.chFavGol >= 4.0) {
         const lambdaChutes = fav.chFavGol * 1.8;
-        const thresholdChutes = this.calcDynamicThreshold(lambdaChutes, [7.5, 8.5, 9.5, 10.5, 11.5, 12.5], 0.70);
+        const thresholdChutes = this.calcDynamicThreshold(lambdaChutes, [9.5, 10.5, 11.5, 12.5, 13.5, 14.5], 0.70, 0.82);
         
         if (thresholdChutes) {
           const probChutes = poissonProb(lambdaChutes, thresholdChutes);
@@ -940,7 +940,7 @@ export class PreLiveMultipleAnalyzer {
       // CANTOS FT
       if (fav.cantFavHT >= 3.0) {
         const lambdaCantos = fav.cantFavHT * 1.6;
-        const thresholdCantos = this.calcDynamicThreshold(lambdaCantos, [2.5, 3.5, 4.5, 5.5], 0.70);
+        const thresholdCantos = this.calcDynamicThreshold(lambdaCantos, [3.5, 4.5, 5.5, 6.5], 0.70, 0.82);
         
         if (thresholdCantos) {
           const probCantos = poissonProb(lambdaCantos, thresholdCantos);
@@ -992,11 +992,11 @@ export class PreLiveMultipleAnalyzer {
         const lambdaChutes = fav.chFavGol * 1.8; // projeção FT
         const linhasChutes = [7.5, 8.5, 9.5, 10.5, 11.5, 12.5];
         
-        // Encontrar linha mais alta com prob >= 0.70
+        // Encontrar linha mais alta com prob entre 70-82%
         let bestThreshold = null;
         for (const linha of [...linhasChutes].reverse()) {
           const prob = poissonProb(lambdaChutes, linha);
-          if (prob >= 0.70) {
+          if (prob >= 0.70 && prob <= 0.82) {
             bestThreshold = { linha, prob };
             break;
           }
@@ -1022,7 +1022,7 @@ export class PreLiveMultipleAnalyzer {
         let bestThreshold = null;
         for (const linha of [...linhasCantos].reverse()) {
           const prob = poissonProb(lambdaCantos, linha);
-          if (prob >= 0.70) {
+          if (prob >= 0.70 && prob <= 0.82) {
             bestThreshold = { linha, prob };
             break;
           }
@@ -1163,13 +1163,13 @@ export class PreLiveMultipleAnalyzer {
 
       if (marketType === 'chutes_ft') {
         const lambda = fav.chFavGol * 1.8;
-        const linhasChutes = [7.5, 8.5, 9.5, 10.5, 11.5, 12.5];
+        const linhasChutes = [9.5, 10.5, 11.5, 12.5, 13.5, 14.5];
         
-        // Encontrar linha mais alta com prob >= 0.70
+        // Encontrar linha mais alta com prob entre 70-82%
         let bestThreshold = null;
         for (const linha of [...linhasChutes].reverse()) {
           const prob = poissonProb(lambda, linha);
-          if (prob >= 0.70) {
+          if (prob >= 0.70 && prob <= 0.82) {
             bestThreshold = { linha, prob };
             break;
           }
@@ -1179,18 +1179,18 @@ export class PreLiveMultipleAnalyzer {
           marketLabel = `${fav.nome} — Over ${bestThreshold.linha} Chutes FT`;
           odd = 1.70;
         } else {
-          // Fallback se nenhuma linha atingir 70%
+          // Fallback se nenhuma linha atingir 70-82%
           marketLabel = `${fav.nome} — Over 9.5 Chutes FT`;
           odd = 1.70;
         }
       } else if (marketType === 'cantos_ft') {
         const lambda = fav.cantFavHT * 1.6;
-        const linhasCantos = [2.5, 3.5, 4.5, 5.5];
+        const linhasCantos = [3.5, 4.5, 5.5, 6.5];
         
         let bestThreshold = null;
         for (const linha of [...linhasCantos].reverse()) {
           const prob = poissonProb(lambda, linha);
-          if (prob >= 0.70) {
+          if (prob >= 0.70 && prob <= 0.82) {
             bestThreshold = { linha, prob };
             break;
           }
@@ -1200,7 +1200,7 @@ export class PreLiveMultipleAnalyzer {
           marketLabel = `${fav.nome} — Over ${bestThreshold.linha} Cantos FT`;
           odd = 1.85;
         } else {
-          // Fallback se nenhuma linha atingir 70%
+          // Fallback se nenhuma linha atingir 70-82%
           marketLabel = `${fav.nome} — Over 3.5 Cantos FT`;
           odd = 1.85;
         }

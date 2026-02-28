@@ -130,13 +130,13 @@ export default function MultipleAnalyzerPage() {
     // CHUTES FT — linha dinâmica
     if (fav.chFavGol >= 4.0) {
       const lambda = fav.chFavGol * 1.8;
-      const linhasChutes = [7.5, 8.5, 9.5, 10.5, 11.5, 12.5];
+      const linhasChutes = [9.5, 10.5, 11.5, 12.5, 13.5, 14.5];
       
-      // Encontrar linha mais alta com prob >= 0.70
+      // Encontrar linha mais alta com prob entre 70-82%
       let bestThreshold = null;
       for (const linha of [...linhasChutes].reverse()) {
         const prob = poissonProb(lambda, linha);
-        if (prob >= 0.70) {
+        if (prob >= 0.70 && prob <= 0.82) {
           bestThreshold = { linha, prob };
           break;
         }
@@ -150,7 +150,7 @@ export default function MultipleAnalyzerPage() {
           odd: 1.70,
         });
       } else {
-        // Fallback se nenhuma linha atingir 70%
+        // Fallback se nenhuma linha atingir 70-82%
         markets.push({
           key: `${game.match || `${game.home} x ${game.away}`}|chutes_ft`,
           label: `${fav.nome} — Over 9.5 Chutes FT`,
@@ -163,12 +163,12 @@ export default function MultipleAnalyzerPage() {
     // CANTOS FT — linha dinâmica
     if (fav.cantFavHT >= 3.0) {
       const lambda = fav.cantFavHT * 1.6;
-      const linhasCantos = [2.5, 3.5, 4.5, 5.5];
+      const linhasCantos = [3.5, 4.5, 5.5, 6.5];
       
       let bestThreshold = null;
       for (const linha of [...linhasCantos].reverse()) {
         const prob = poissonProb(lambda, linha);
-        if (prob >= 0.70) {
+        if (prob >= 0.70 && prob <= 0.82) {
           bestThreshold = { linha, prob };
           break;
         }
@@ -182,7 +182,7 @@ export default function MultipleAnalyzerPage() {
           odd: 1.85,
         });
       } else {
-        // Fallback se nenhuma linha atingir 70%
+        // Fallback se nenhuma linha atingir 70-82%
         markets.push({
           key: `${game.match || `${game.home} x ${game.away}`}|cantos_ft`,
           label: `${fav.nome} — Over 3.5 Cantos FT`,
