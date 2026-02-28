@@ -1,5 +1,12 @@
+import { 
+  fetchRealStatsForMatches, 
+  fetchOddsForCsvGames,
+  testOddsEndpoint,
+  testAllOddsForFixture,
+  type PreMatchOdds 
+} from './footballApi';
+
 import { parseCSV, getOddForLabel, classifyProfile, getFavorito, computeConfidence, computeScore, calculateValueBet, getMinOddForLabel, suggestMainMarket, suggestCombo, detectPoisonTriggers, suggestBetBuilder, extractDateFromHour } from "../engine";
-import type { PreMatchOdds } from "./footballApi";
 
 // ── FUNÇÕES POISSON ─────────────────────────────────────────────────────────────
 function factorial(n: number): number {
@@ -135,6 +142,12 @@ export class PreLiveMultipleAnalyzer {
       }
     }
     console.log(`[ODDS-INJECT] ${Object.keys(this.realOddsMap).length} jogos com odds reais injetadas`);
+    
+    // 🆕 LOG PARA DESCOBRIR FIXTURE ID NUMÉRICO DA API-FOOTBALL
+    console.log('[FIXTURE-ID] Map de jogos para teste:');
+    Object.entries(fixtureMap).forEach(([matchKey, fixtureId]) => {
+      console.log(`  fixtureId=${fixtureId} | ${matchKey}`);
+    });
   }
 
   /** Busca a melhor odd disponível: real API > CSV > odd estimada (minOdd do engine) */
@@ -298,6 +311,92 @@ export class PreLiveMultipleAnalyzer {
     return null;
   }
 
+  // 🆕 FUNÇÃO PARA BUSCAR ODDS REAIS DA API-FOOTBALL
+  private async fetchRealOdds(fixtureId: number): Promise<{
+    cornersLines: { line: number, odd: number }[],
+    shotsLines:   { line: number, odd: number }[]
+  }> {
+    const KEY = process.env.FOOTBALL_API_KEY!;
+    if (!KEY) {
+      console.log('[ODDS-REAL] Sem API key configurada');
+      return { cornersLines: [], shotsLines: [] };
+    }
+
+    try {
+      // Buscar odds de cantos (bet=45)
+      const cornersRes = await fetch(
+        `https://v3.football.api-sports.io/odds?fixture=${fixtureId}&bookmaker=8&bet=45`,
+        { headers: { 'x-apisports-key': KEY } }
+      );
+      const cornersData = await cornersRes.json();
+      const bet45 = cornersData.response?.[0]?.bookmakers?.[0]?.bets?.[0];
+      
+      const cornersLines = (bet45?.values || [])
+        .filter((v: any) => v.value && v.value.startsWith('Over'))
+        .map((v: any) => ({
+          line: parseFloat(v.value.replace('Over ', '')),
+          odd: parseFloat(v.odd)
+        }))
+        .filter((item: any) => !isNaN(item.line) && !isNaN(item.odd) && item.odd > 1);
+
+      // Buscar odds de chutes (apenas bet=87 - ShotOnTarget)
+      let shotsLines: { line: number, odd: number }[] = [];
+      
+      // Tentar ShotOnTarget (bet=87) - fonte primária
+      const shotsRes = await fetch(
+        `https://v3.football.api-sports.io/odds?fixture=${fixtureId}&bookmaker=8&bet=87`,
+        { headers: { 'x-apisports-key': KEY } }
+      );
+      const shotsData = await shotsRes.json();
+      const betShots = shotsData.response?.[0]?.bookmakers?.[0]?.bets?.[0];
+      
+      if (betShots?.values) {
+        shotsLines = betShots.values
+          .filter((v: any) => v.value && v.value.startsWith('Over'))
+          .map((v: any) => ({
+            line: parseFloat(v.value.replace('Over ', '')),
+            odd: parseFloat(v.odd)
+          }))
+          .filter((item: any) => !isNaN(item.line) && !isNaN(item.odd) && item.odd > 1);
+      }
+
+      // Se não encontrou em ShotOnTarget, tentar Home/Away Shots (bet=64/65)
+      if (shotsLines.length === 0) {
+        for (const betId of [64, 65]) {
+          const altShotsRes = await fetch(
+            `https://v3.football.api-sports.io/odds?fixture=${fixtureId}&bookmaker=8&bet=${betId}`,
+            { headers: { 'x-apisports-key': KEY } }
+          );
+          const altShotsData = await altShotsRes.json();
+          const betAltShots = altShotsData.response?.[0]?.bookmakers?.[0]?.bets?.[0];
+          
+          if (betAltShots?.values) {
+            const altLines = betAltShots.values
+              .filter((v: any) => v.value && v.value.startsWith('Over'))
+              .map((v: any) => ({
+                line: parseFloat(v.value.replace('Over ', '')),
+                odd: parseFloat(v.odd)
+              }))
+              .filter((item: any) => !isNaN(item.line) && !isNaN(item.odd) && item.odd > 1);
+            
+            if (altLines.length > 0) {
+              shotsLines = altLines;
+              console.log(`[ODDS-REAL] Usando alt shots bet=${betId}: ${altLines.length} linhas`);
+              break;
+            }
+          }
+        }
+      }
+
+      console.log(`[ODDS-REAL] fixture=${fixtureId}: cantos=${cornersLines.length} chutes=${shotsLines.length}`);
+      
+      return { cornersLines, shotsLines };
+    } catch (error) {
+      console.error(`[ODDS-REAL] Erro fixture=${fixtureId}:`, error);
+      return { cornersLines: [], shotsLines: [] };
+    }
+  }
+
   // Verifica se odd está na faixa operável por mercado individual (amplo o suficiente para não descartar estatísticas boas)
   private isOddInRange(odd: number | null): boolean {
     if (!odd || odd <= 1.01) return false;
@@ -434,7 +533,7 @@ export class PreLiveMultipleAnalyzer {
   }
 
   // Analisa CSV do dia para gerar múltiplas pré-live
-  analyzeLiveMultiples(csvText: string, oddsMap?: Record<number, PreMatchOdds>, fixtureMap?: Record<string, number>, ignoredMatches: string[] = []): {
+  async analyzeLiveMultiples(csvText: string, oddsMap?: Record<number, PreMatchOdds>, fixtureMap?: Record<string, number>, ignoredMatches: string[] = []): Promise<{
     suggestions: LiveMultipleSuggestion[];
     summary: {
       totalGames: number;
@@ -443,7 +542,7 @@ export class PreLiveMultipleAnalyzer {
       avgConfidence: number;
     };
     ftBoxCandidates?: any[];
-  } {
+  }> {
     try {
       const { games } = parseCSV(csvText);
       console.log(`📊 ${games.length} jogos encontrados no CSV`);
@@ -497,7 +596,7 @@ export class PreLiveMultipleAnalyzer {
       }
       
       // Gera múltiplas baseadas em confluência de perfis
-      const suggestions = this.generateQualityMultiples(qualityGames);
+      const suggestions = await this.generateQualityMultiples(qualityGames);
       console.log(` ${suggestions.length} múltiplas geradas por confluência`);
       
       return {
@@ -509,7 +608,7 @@ export class PreLiveMultipleAnalyzer {
           avgConfidence: suggestions.reduce((acc, s) => acc + s.confidence, 0) / suggestions.length || 0
         },
         // 🆕 Adicionar ftBoxCandidates para o construtor manual
-        ftBoxCandidates: this.getFTBoxCandidates(qualityGames)
+        ftBoxCandidates: await this.getFTBoxCandidates(qualityGames)
       };
     } catch (error) {
       console.error(' Erro na análise pré-live:', error);
@@ -526,7 +625,7 @@ export class PreLiveMultipleAnalyzer {
     }
   }
 
-  private generateQualityMultiples(games: any[]): LiveMultipleSuggestion[] {
+  private async generateQualityMultiples(games: any[]): Promise<LiveMultipleSuggestion[]> {
     const suggestions: LiveMultipleSuggestion[] = [];
 
     // Ordenar: Poison primeiro, depois por score decrescente
@@ -700,7 +799,7 @@ export class PreLiveMultipleAnalyzer {
     if (bingo) suggestions.push(bingo);
 
     // 🆕 3️⃣ Box FT Dominância gerado por último
-    const ftBox = this.buildFTBox(topGames);
+    const ftBox = await this.buildFTBox(topGames);
     if (ftBox) suggestions.push(ftBox);
 
     return suggestions;
@@ -903,8 +1002,8 @@ export class PreLiveMultipleAnalyzer {
     return null;
   }
 
-  // 🆕 Extrair candidatos FT Box para o construtor manual
-  private getFTBoxCandidates(qualityGames: any[]): any[] {
+  // 🆕 Extrair candidatos FT Box para o construtor manual com fallback de odds reais
+  private async getFTBoxCandidates(qualityGames: any[]): Promise<any[]> {
     const ftBoxCandidates: any[] = [];
     
     for (const game of qualityGames) {
@@ -920,6 +1019,12 @@ export class PreLiveMultipleAnalyzer {
       // 🆕 Log extra para verificar dados de cantos
       console.log(`[FTBOX-PAIR] ${fav.nome}: chFavGol=${fav.chFavGol}, cantFavHT=${fav.cantFavHT}`);
       
+      // 🆕 BUSCAR ODDS REAIS DA API
+      let realOdds: { cornersLines: any[], shotsLines: any[] } = { cornersLines: [], shotsLines: [] };
+      if (game.apiFixtureId) {
+        realOdds = await this.fetchRealOdds(game.apiFixtureId);
+      }
+      
       // CHUTES FT
       if (fav.chFavGol >= 4.0) {
         const lambdaChutes = fav.chFavGol * 1.8;
@@ -927,13 +1032,31 @@ export class PreLiveMultipleAnalyzer {
         
         if (thresholdChutes) {
           const probChutes = poissonProb(lambdaChutes, thresholdChutes);
+          let realOdd = 1.70; // fallback
+          let oddsSource = 'fallback';
+          
+          // 🆕 Tentar usar odds reais
+          if (realOdds.shotsLines.length > 0) {
+            const closestLine = realOdds.shotsLines.reduce((closest: any, current: any) => {
+              const currentDiff = Math.abs(current.line - thresholdChutes);
+              const closestDiff = Math.abs(closest.line - thresholdChutes);
+              return currentDiff < closestDiff ? current : closest;
+            });
+            
+            if (Math.abs(closestLine.line - thresholdChutes) <= 1.5) {
+              realOdd = closestLine.odd;
+              oddsSource = 'api-real';
+            }
+          }
+          
           gameMarkets.push({
             label: `${fav.nome} — Over ${thresholdChutes} Chutes FT`,
             axis: 'chutes_ft',
-            odd: 1.70,
+            odd: realOdd,
             prob: probChutes,
             gold: probChutes >= 0.80,
           });
+          console.log(`[FTBOX-MANUAL] ${fav.nome} chutes: linha=${thresholdChutes} odd=${realOdd} (${oddsSource})`);
         }
       }
       
@@ -944,13 +1067,31 @@ export class PreLiveMultipleAnalyzer {
         
         if (thresholdCantos) {
           const probCantos = poissonProb(lambdaCantos, thresholdCantos);
+          let realOdd = 1.85; // fallback
+          let oddsSource = 'fallback';
+          
+          // 🆕 Tentar usar odds reais
+          if (realOdds.cornersLines.length > 0) {
+            const closestLine = realOdds.cornersLines.reduce((closest: any, current: any) => {
+              const currentDiff = Math.abs(current.line - thresholdCantos);
+              const closestDiff = Math.abs(closest.line - thresholdCantos);
+              return currentDiff < closestDiff ? current : closest;
+            });
+            
+            if (Math.abs(closestLine.line - thresholdCantos) <= 1.0) {
+              realOdd = closestLine.odd;
+              oddsSource = 'api-real';
+            }
+          }
+          
           gameMarkets.push({
             label: `${fav.nome} — Over ${thresholdCantos} Cantos FT`,
             axis: 'cantos_ft',
-            odd: 1.85,
+            odd: realOdd,
             prob: probCantos,
             gold: probCantos >= 0.80,
           });
+          console.log(`[FTBOX-MANUAL] ${fav.nome} cantos: linha=${thresholdCantos} odd=${realOdd} (${oddsSource})`);
         }
       }
       
@@ -971,7 +1112,7 @@ export class PreLiveMultipleAnalyzer {
   }
 
   // 🆕 CONSTRÓI BOX FT DOMINÂNCIA
-  private buildFTBox(qualityGames: any[]): LiveMultipleSuggestion | null {
+  private async buildFTBox(qualityGames: any[]): Promise<LiveMultipleSuggestion | null> {
     // Candidatos ao Box FT
     const ftBoxCandidates: any[] = [];
 
@@ -987,10 +1128,16 @@ export class PreLiveMultipleAnalyzer {
 
       const gameMarkets: any[] = [];
 
-      // CHUTES FT — linha dinâmica
+      // 🆕 BUSCAR ODDS REAIS DA API
+      let realOdds: { cornersLines: any[], shotsLines: any[] } = { cornersLines: [], shotsLines: [] };
+      if (game.apiFixtureId) {
+        realOdds = await this.fetchRealOdds(game.apiFixtureId);
+      }
+
+      // CHUTES FT — linha dinâmica com odds reais
       if (fav.chFavGol >= 4.0) {
-        const lambdaChutes = fav.chFavGol * 1.8; // projeção FT
-        const linhasChutes = [7.5, 8.5, 9.5, 10.5, 11.5, 12.5];
+        const lambdaChutes = fav.chFavGol * 1.8;
+        const linhasChutes = [9.5, 10.5, 11.5, 12.5, 13.5, 14.5];
         
         // Encontrar linha mais alta com prob entre 70-82%
         let bestThreshold = null;
@@ -1003,21 +1150,45 @@ export class PreLiveMultipleAnalyzer {
         }
         
         if (bestThreshold) {
+          // 🆕 BUSCAR ODD REAL DA API COM FALLBACK
+          let realOdd = 1.70; // fallback padrão
+          let oddsSource = 'fallback';
+          
+          if (realOdds.shotsLines.length > 0) {
+            // Encontrar linha mais próxima na API
+            const closestLine = realOdds.shotsLines.reduce((closest: any, current: any) => {
+              const currentDiff = Math.abs(current.line - bestThreshold.linha);
+              const closestDiff = Math.abs(closest.line - bestThreshold.linha);
+              return currentDiff < closestDiff ? current : closest;
+            });
+            
+            // Se a linha da API for razoavelmente próxima (diferença <= 1.5), usar odd real
+            if (Math.abs(closestLine.line - bestThreshold.linha) <= 1.5) {
+              realOdd = closestLine.odd;
+              oddsSource = 'api-real';
+              console.log(`[FTBOX-AUTO] ${fav.nome} chutes: Poisson=${bestThreshold.linha} API=${closestLine.line} odd=${realOdd} ✅`);
+            } else {
+              console.log(`[FTBOX-AUTO] ${fav.nome} chutes: linha incompatível Poisson=${bestThreshold.linha} API=${closestLine.line} → fallback`);
+            }
+          } else {
+            console.log(`[FTBOX-AUTO] ${fav.nome} chutes: sem odds API → fallback Poisson`);
+          }
+          
           gameMarkets.push({
             label: `${fav.nome} — Over ${bestThreshold.linha} Chutes FT`,
             axis: 'chutes_ft',
-            odd: 1.70,
+            odd: realOdd,
             prob: bestThreshold.prob,
             gold: bestThreshold.prob >= 0.80,
           });
-          console.log(`[FTBOX-AUTO] ${fav.nome} chutes: lambda=${lambdaChutes.toFixed(1)} → linha=${bestThreshold.linha} prob=${(bestThreshold.prob*100).toFixed(0)}%`);
+          console.log(`[FTBOX-AUTO] ${fav.nome} chutes: lambda=${lambdaChutes.toFixed(1)} → linha=${bestThreshold.linha} prob=${(bestThreshold.prob*100).toFixed(0)}% odd=${realOdd} (${oddsSource})`);
         }
       }
 
-      // CANTOS FT — linha dinâmica
+      // CANTOS FT — linha dinâmica com odds reais
       if (fav.cantFavHT >= 3.0) {
-        const lambdaCantos = fav.cantFavHT * 1.6; // projeção FT
-        const linhasCantos = [2.5, 3.5, 4.5, 5.5];
+        const lambdaCantos = fav.cantFavHT * 1.6;
+        const linhasCantos = [3.5, 4.5, 5.5, 6.5];
         
         let bestThreshold = null;
         for (const linha of [...linhasCantos].reverse()) {
@@ -1029,14 +1200,38 @@ export class PreLiveMultipleAnalyzer {
         }
         
         if (bestThreshold) {
+          // 🆕 BUSCAR ODD REAL DA API COM FALLBACK
+          let realOdd = 1.85; // fallback padrão
+          let oddsSource = 'fallback';
+          
+          if (realOdds.cornersLines.length > 0) {
+            // Encontrar linha mais próxima na API
+            const closestLine = realOdds.cornersLines.reduce((closest: any, current: any) => {
+              const currentDiff = Math.abs(current.line - bestThreshold.linha);
+              const closestDiff = Math.abs(closest.line - bestThreshold.linha);
+              return currentDiff < closestDiff ? current : closest;
+            });
+            
+            // Se a linha da API for razoavelmente próxima (diferença <= 1.0), usar odd real
+            if (Math.abs(closestLine.line - bestThreshold.linha) <= 1.0) {
+              realOdd = closestLine.odd;
+              oddsSource = 'api-real';
+              console.log(`[FTBOX-AUTO] ${fav.nome} cantos: Poisson=${bestThreshold.linha} API=${closestLine.line} odd=${realOdd} ✅`);
+            } else {
+              console.log(`[FTBOX-AUTO] ${fav.nome} cantos: linha incompatível Poisson=${bestThreshold.linha} API=${closestLine.line} → fallback`);
+            }
+          } else {
+            console.log(`[FTBOX-AUTO] ${fav.nome} cantos: sem odds API → fallback Poisson`);
+          }
+          
           gameMarkets.push({
             label: `${fav.nome} — Over ${bestThreshold.linha} Cantos FT`,
             axis: 'cantos_ft',
-            odd: 1.85,
+            odd: realOdd,
             prob: bestThreshold.prob,
             gold: bestThreshold.prob >= 0.80,
           });
-          console.log(`[FTBOX-AUTO] ${fav.nome} cantos: lambda=${lambdaCantos.toFixed(1)} → linha=${bestThreshold.linha} prob=${(bestThreshold.prob*100).toFixed(0)}%`);
+          console.log(`[FTBOX-AUTO] ${fav.nome} cantos: lambda=${lambdaCantos.toFixed(1)} → linha=${bestThreshold.linha} prob=${(bestThreshold.prob*100).toFixed(0)}% odd=${realOdd} (${oddsSource})`);
         }
       }
 
@@ -1148,18 +1343,26 @@ export class PreLiveMultipleAnalyzer {
     }
   }
 
-  // 🆕 CONSTRÓI BOX FT PERSONALIZADO (sem verificação de conflitos externos)
-  buildCustomFTBox(selectedGames: any[], selectedMarketsData: any[]): LiveMultipleSuggestion | null {
+  // 🆕 CONSTRÓI BOX FT PERSONALIZADO (sem verificação de conflitos externos) com fallback de odds reais
+  async buildCustomFTBox(selectedGames: any[], selectedMarketsData: any[]): Promise<LiveMultipleSuggestion | null> {
     if (selectedGames.length < 2 || selectedMarketsData.length < 2) {
       console.log(`[SGP-ftbox-custom] ❌ Jogos insuficientes: ${selectedGames.length} jogos, ${selectedMarketsData.length} mercados`);
       return null;
     }
 
-    // Montar seleções personalizadas
-    const selections = selectedMarketsData.map(({ game, marketType }) => {
+    // Montar seleções personalizadas com odds reais
+    const selections = await Promise.all(selectedMarketsData.map(async ({ game, marketType }) => {
       const fav = getFavorito(game);
       let marketLabel = '';
-      let odd = 1.70;
+      let odd = 1.70; // fallback
+      let prob = 0.70;
+      let oddsSource = 'fallback';
+
+      // 🆕 BUSCAR ODDS REAIS DA API
+      let realOdds: { cornersLines: any[], shotsLines: any[] } = { cornersLines: [], shotsLines: [] };
+      if (game.apiFixtureId) {
+        realOdds = await this.fetchRealOdds(game.apiFixtureId);
+      }
 
       if (marketType === 'chutes_ft') {
         const lambda = fav.chFavGol * 1.8;
@@ -1168,16 +1371,31 @@ export class PreLiveMultipleAnalyzer {
         // Encontrar linha mais alta com prob entre 70-82%
         let bestThreshold = null;
         for (const linha of [...linhasChutes].reverse()) {
-          const prob = poissonProb(lambda, linha);
-          if (prob >= 0.70 && prob <= 0.82) {
-            bestThreshold = { linha, prob };
+          const probTest = poissonProb(lambda, linha);
+          if (probTest >= 0.70 && probTest <= 0.82) {
+            bestThreshold = { linha, prob: probTest };
             break;
           }
         }
         
         if (bestThreshold) {
+          prob = bestThreshold.prob;
+          
+          // 🆕 Tentar usar odds reais
+          if (realOdds.shotsLines.length > 0) {
+            const closestLine = realOdds.shotsLines.reduce((closest: any, current: any) => {
+              const currentDiff = Math.abs(current.line - bestThreshold.linha);
+              const closestDiff = Math.abs(closest.line - bestThreshold.linha);
+              return currentDiff < closestDiff ? current : closest;
+            });
+            
+            if (Math.abs(closestLine.line - bestThreshold.linha) <= 1.5) {
+              odd = closestLine.odd;
+              oddsSource = 'api-real';
+            }
+          }
+          
           marketLabel = `${fav.nome} — Over ${bestThreshold.linha} Chutes FT`;
-          odd = 1.70;
         } else {
           // Fallback se nenhuma linha atingir 70-82%
           marketLabel = `${fav.nome} — Over 9.5 Chutes FT`;
@@ -1189,22 +1407,39 @@ export class PreLiveMultipleAnalyzer {
         
         let bestThreshold = null;
         for (const linha of [...linhasCantos].reverse()) {
-          const prob = poissonProb(lambda, linha);
-          if (prob >= 0.70 && prob <= 0.82) {
-            bestThreshold = { linha, prob };
+          const probTest = poissonProb(lambda, linha);
+          if (probTest >= 0.70 && probTest <= 0.82) {
+            bestThreshold = { linha, prob: probTest };
             break;
           }
         }
         
         if (bestThreshold) {
+          prob = bestThreshold.prob;
+          
+          // 🆕 Tentar usar odds reais
+          if (realOdds.cornersLines.length > 0) {
+            const closestLine = realOdds.cornersLines.reduce((closest: any, current: any) => {
+              const currentDiff = Math.abs(current.line - bestThreshold.linha);
+              const closestDiff = Math.abs(closest.line - bestThreshold.linha);
+              return currentDiff < closestDiff ? current : closest;
+            });
+            
+            if (Math.abs(closestLine.line - bestThreshold.linha) <= 1.0) {
+              odd = closestLine.odd;
+              oddsSource = 'api-real';
+            }
+          }
+          
           marketLabel = `${fav.nome} — Over ${bestThreshold.linha} Cantos FT`;
-          odd = 1.85;
         } else {
           // Fallback se nenhuma linha atingir 70-82%
           marketLabel = `${fav.nome} — Over 3.5 Cantos FT`;
           odd = 1.85;
         }
       }
+
+      console.log(`[FTBOX-CUSTOM] ${fav.nome} ${marketType}: linha=${marketLabel.split(' ')[1]} odd=${odd} (${oddsSource})`);
 
       return {
         match: game.match || `${game.home} x ${game.away}`,
@@ -1218,9 +1453,9 @@ export class PreLiveMultipleAnalyzer {
         recommendation: "Personalizado",
         reason: "Box FT Personalizado",
         gameProfile: classifyProfile(game) || "generic",
-        confidence: 75,
+        confidence: Math.round(prob * 100),
       };
-    });
+    }));
 
     // Calcular odd total
     const totalOdd = selections.reduce((acc, s) => acc * s.odd, 1);
@@ -1247,11 +1482,21 @@ export class PreLiveMultipleAnalyzer {
 }
 
 // Função principal para análise pré-live
-export function analyzePreLiveMultiples(csvText: string): {
+export async function analyzePreLiveMultiples(csvText: string): Promise<{
   suggestions: LiveMultipleSuggestion[];
   summary: any;
   ftBoxCandidates?: any[];
-} {
+}> {
   const analyzer = new PreLiveMultipleAnalyzer();
   return analyzer.analyzeLiveMultiples(csvText);
+}
+
+// 🆕 Export async version for real odds integration
+export async function analyzeLiveMultiplesAsync(csvText: string, oddsMap?: Record<number, PreMatchOdds>, fixtureMap?: Record<string, number>, ignoredMatches: string[] = []): Promise<{
+  suggestions: LiveMultipleSuggestion[];
+  summary: any;
+  ftBoxCandidates?: any[];
+}> {
+  const analyzer = new PreLiveMultipleAnalyzer();
+  return analyzer.analyzeLiveMultiples(csvText, oddsMap, fixtureMap, ignoredMatches);
 }

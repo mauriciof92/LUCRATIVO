@@ -249,6 +249,23 @@ export default function PanoramaPage() {
     const source = (todayGames && todayGames.length > 0) ? todayGames : results;
     let list = [...source];
 
+    // 🆕 FILTRAR JOGOS QUE JÁ COMEÇARAM
+    const now = new Date();
+    const currentTime = now.getHours() * 60 + now.getMinutes();
+    
+    // Extrair HH:MM de strings como "22/02 15:00" ou "2026-02-22 15:00" ou "15:00"
+    const extractTime = (h: string) => {
+      const m = (h ?? '').match(/(\d{1,2}):(\d{2})/);
+      return m ? parseInt(m[1]) * 60 + parseInt(m[2]) : 9999;
+    };
+    
+    const isGameStarted = (game: any) => {
+      const gameTime = extractTime(game.hour);
+      return gameTime <= currentTime;
+    };
+    
+    list = list.filter((g: any) => !isGameStarted(g));
+
     if (filterTier) list = list.filter((g: any) => {
       const s = Math.round(Number(g.score ?? 0) * 100);
       return filterTier === 'elite'    ? s >= 75 :
@@ -264,12 +281,6 @@ export default function PanoramaPage() {
       const comboLabels = (g.combo ?? []).map((c: any) => (c.label ?? '').toLowerCase());
       return mainLabel.includes(mk) || comboLabels.some((l: string) => l.includes(mk));
     });
-
-    // Extrair HH:MM de strings como "22/02 15:00" ou "2026-02-22 15:00" ou "15:00"
-    const extractTime = (h: string) => {
-      const m = (h ?? '').match(/(\d{1,2}):(\d{2})/);
-      return m ? parseInt(m[1]) * 60 + parseInt(m[2]) : 9999;
-    };
 
     return list.sort((a: any, b: any) =>
       sortBy === 'score'  ? Number(b.score ?? 0) - Number(a.score ?? 0) :

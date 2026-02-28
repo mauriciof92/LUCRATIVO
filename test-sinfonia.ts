@@ -1,1 +1,0 @@
-﻿import { PreLiveMultipleAnalyzer } from './src/lib/pre-live-multiple-analyzer'; import * as fs from 'fs'; const csv = fs.readFileSync('./src/lib/__tests__/test.csv', 'utf8'); const analyzer = new PreLiveMultipleAnalyzer(); const res = analyzer.analyzeLiveMultiples(csv); console.log(JSON.stringify(res.suggestions.filter(s => s.type === 'sinfonia'), null, 2));

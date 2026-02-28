@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useBacktest } from '../../hooks/useBacktest';
 import { NavHeader } from '../../components/NavHeader';
 import { PreLiveMultipleAnalyzer } from '../../lib/pre-live-multiple-analyzer';
@@ -48,6 +48,31 @@ export default function MultipleAnalyzerPage() {
   const [showFTBoxBuilder, setShowFTBoxBuilder] = useState(false);
   const [selectedGames, setSelectedGames] = useState<Set<string>>(new Set());
   const [selectedMarkets, setSelectedMarkets] = useState<Set<string>>(new Set());
+
+  // 🆕 FORÇAR EXECUÇÃO DO TESTE DE ODDS (DESATIVADO)
+  useEffect(() => {
+    // Temporariamente desativado para não poluir console
+    // async function testOdds() {
+    //   // Temporário — só para ver se a API tem os mercados
+    //   const KEY = '70c968a10d5fb42058742e546b268f3d'; // hardcode temporário
+      
+    //   const res = await fetch(
+    //     `https://v3.football.api-sports.io/odds?fixture=1378126&bookmaker=8`,
+    //     { headers: { 'x-apisports-key': KEY } }
+    //   );
+    //   const data = await res.json();
+    //   const bets = data.response?.[0]?.bookmakers?.[0]?.bets || [];
+    //   console.log(`[ODDS-TEST] Total mercados: ${bets.length}`);
+    //   bets.forEach((bet: any) => {
+    //     console.log(`  [bet.id=${bet.id}] ${bet.name}`);
+    //     bet.values?.slice(0, 3).forEach((v: any) => {
+    //       console.log(`    → ${v.value}: ${v.odd}`);
+    //     });
+    //   });
+    // };
+    // testOdds();
+  }, []); // roda UMA vez ao montar
+  
   const [customFTBox, setCustomFTBox] = useState<any>(null);
   const [ftBoxCandidates, setFtBoxCandidates] = useState<any[]>([]);
 
@@ -66,14 +91,14 @@ export default function MultipleAnalyzerPage() {
 
   const handleAnalyze = async () => {
     const text = csvText.trim();
-    if (!text) { 
-      setError('Nenhum jogo encontrado. Carregue dados no Admin primeiro.'); 
+    if (!text.trim()) {
+      setError('Por favor, cole o CSV do dia');
       return; 
     }
     setAnalyzing(true);
     setError('');
     try {
-      const result = analyzer.analyzeLiveMultiples(text, undefined, undefined, ignoredMatches);
+      const result = await analyzer.analyzeLiveMultiples(text, undefined, undefined, ignoredMatches);
       setSuggestions(result.suggestions ?? []);
       setSummary(result.summary);
       // 🆕 Guardar ftBoxCandidates para o construtor manual
@@ -219,7 +244,7 @@ export default function MultipleAnalyzerPage() {
       // Re-analisar com odds injetadas
       if (result.oddsMap && result.fixtureMap) {
         analyzer.injectRealOdds(result.oddsMap, result.fixtureMap);
-        const enriched = analyzer.analyzeLiveMultiples(csvText, result.oddsMap, result.fixtureMap, ignoredMatches);
+        const enriched = await analyzer.analyzeLiveMultiples(csvText, result.oddsMap, result.fixtureMap, ignoredMatches);
         setSuggestions(enriched.suggestions);
       }
 
@@ -233,15 +258,12 @@ export default function MultipleAnalyzerPage() {
     }
   };
 
-  // 🔄 Handler: Ignorar jogo e regerar bilhetes (efeito roleta — só na sessão)
-  const handleIgnoreMatch = (matchName: string) => {
-    const updated = [...ignoredMatches, matchName];
-    setIgnoredMatches(updated);
-    // Regerar bilhetes imediatamente sem o jogo ignorado
+  // Handler: Ignorar jogo e regerar bilhetes (efeito roleta — só na sessão)
+  const regenerateTickets = async (updated: string[]) => {
     const text = csvText.trim();
     if (!text) return;
     try {
-      const result = analyzer.analyzeLiveMultiples(text, undefined, undefined, updated);
+      const result = await analyzer.analyzeLiveMultiples(text, undefined, undefined, updated);
       setSuggestions(result.suggestions ?? []);
       setSummary(result.summary);
     } catch (e) {
@@ -249,13 +271,19 @@ export default function MultipleAnalyzerPage() {
     }
   };
 
+  const handleIgnoreMatch = (matchName: string) => {
+    const updated = [...ignoredMatches, matchName];
+    setIgnoredMatches(updated);
+    regenerateTickets(updated);
+  };
+
   // 🔄 Handler: Limpar todos os jogos ignorados e regerar
-  const handleClearIgnored = () => {
+  const handleClearIgnored = async () => {
     setIgnoredMatches([]);
     const text = csvText.trim();
     if (!text) return;
     try {
-      const result = analyzer.analyzeLiveMultiples(text);
+      const result = await analyzer.analyzeLiveMultiples(text);
       setSuggestions(result.suggestions ?? []);
       setSummary(result.summary);
     } catch (e) {
@@ -302,7 +330,7 @@ export default function MultipleAnalyzerPage() {
           <div style={{ display: 'flex', gap: 12, marginTop: 20, flexWrap: 'wrap' }}>
             <button
               onClick={handleAnalyze}
-              disabled={analyzing || !csvText}
+              disabled={analyzing || !csvText ? true : false}
               style={{
                 background: analyzing ? C.muted : C.blue,
                 color: 'white', border: 'none', borderRadius: 6, padding: '10px 20px',
@@ -328,7 +356,7 @@ export default function MultipleAnalyzerPage() {
             {suggestions.length > 0 && (
               <button
                 onClick={handleFetchOdds}
-                disabled={loadingOdds}
+                disabled={loadingOdds ? true : false}
                 style={{
                   background: loadingOdds ? C.muted : C.green,
                   color: 'white', border: 'none', borderRadius: 6, padding: '10px 20px',
@@ -365,7 +393,7 @@ export default function MultipleAnalyzerPage() {
             </p>
 
             <div style={{ display: 'grid', gap: 16, maxHeight: 400, overflowY: 'auto' }}>
-              {ftBoxCandidates.map((candidate: any, i: number) => {
+              {ftBoxCandidates.map((candidate: any) => {
                 const game = candidate.game;
                 const gameKey = game.match || `${game.home} x ${game.away}`;
                 const isSelected = selectedGames.has(gameKey);
@@ -374,7 +402,7 @@ export default function MultipleAnalyzerPage() {
                 if (ftMarkets.length === 0) return null;
 
                 return (
-                  <div key={i} style={{
+                  <div key={gameKey} style={{
                     background: isSelected ? `${C.gold}20` : 'transparent',
                     border: `1px solid ${isSelected ? C.gold : C.border}`,
                     borderRadius: 8, padding: 12,
@@ -402,7 +430,7 @@ export default function MultipleAnalyzerPage() {
 
                     {isSelected && (
                       <div style={{ marginLeft: 24, display: 'grid', gap: 6 }}>
-                        {ftMarkets.map((market: any) => {
+                        {ftMarkets.map((market: any, marketIndex: number) => {
                           const isMarketSelected = selectedMarkets.has(market.key);
                           const axisConflict = Array.from(selectedMarkets).some(m => {
                             if (m === market.key) return false;
@@ -415,7 +443,7 @@ export default function MultipleAnalyzerPage() {
                               <input
                                 type="checkbox"
                                 checked={isMarketSelected}
-                                disabled={axisConflict && !isMarketSelected}
+                                disabled={axisConflict && !isMarketSelected ? true : false}
                                 onChange={(e) => {
                                   const newMarkets = new Set(selectedMarkets);
                                   if (e.target.checked) {
@@ -472,7 +500,7 @@ export default function MultipleAnalyzerPage() {
                 </button>
                 <button
                   onClick={handleGenerateCustomFTBox}
-                  disabled={selectedGames.size < 2 || selectedMarkets.size < 2 ? true : undefined}
+                  disabled={selectedGames.size < 2 || selectedMarkets.size < 2 ? true : false}
                   style={{
                     background: selectedGames.size >= 2 && selectedMarkets.size >= 2 ? C.gold : C.muted,
                     color: 'white', border: 'none', borderRadius: 6, padding: '8px 16px',
@@ -530,7 +558,7 @@ export default function MultipleAnalyzerPage() {
                   ).map(([match, sels]: [string, any], j: number) => {
                     const gameOdd = sels.reduce((acc: number, sel: any) => acc * (sel.odd > 1 ? sel.odd : 1), 1);
                     return (
-                      <div key={j} style={{
+                      <div key={`custom-ft-${match}-${j}`} style={{
                         background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: 12,
                       }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -539,7 +567,7 @@ export default function MultipleAnalyzerPage() {
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                           {sels.map((sel: any, k: number) => (
-                            <div key={k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div key={`custom-ft-sel-${sel.market}-${k}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <span style={{ fontSize: 12, color: C.text }}>{sel.market}</span>
                               <span style={{ fontSize: 12, fontWeight: 600, color: C.green }}>{sel.odd > 1 ? sel.odd.toFixed(2) : '—'}</span>
                             </div>
@@ -627,7 +655,7 @@ export default function MultipleAnalyzerPage() {
                           ).map(([match, sels]: [string, any], j: number) => {
                             const gameOdd = sels.reduce((acc: number, sel: any) => acc * (sel.odd > 1 ? sel.odd : 1), 1);
                             return (
-                              <div key={j} style={{
+                              <div key={`sinfonia-${match}-${j}`} style={{
                                 background: C.bg, border: `1px solid ${C.border}`,
                                 borderRadius: 8, padding: '12px',
                               }}>
@@ -658,7 +686,7 @@ export default function MultipleAnalyzerPage() {
                                   <div style={{ position: 'absolute', left: 5, top: 10, bottom: 10, width: 2, background: C.border, zIndex: 0 }} />
                                   
                                   {sels.map((sel: any, k: number) => (
-                                    <div key={k} style={{ display: 'flex', alignItems: 'flex-start', position: 'relative', zIndex: 1 }}>
+                                    <div key={`sinfonia-sel-${sel.market}-${k}`} style={{ display: 'flex', alignItems: 'flex-start', position: 'relative', zIndex: 1 }}>
                                       <div style={{ 
                                         width: 12, height: 12, borderRadius: '50%', 
                                         background: C.bg, border: `2px solid ${C.muted}`,
@@ -734,7 +762,7 @@ export default function MultipleAnalyzerPage() {
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                           {s.selections?.map((sel: any, j: number) => (
-                            <div key={j} style={{
+                            <div key={`trad-sel-${sel.market}-${j}`} style={{
                               background: C.bg, border: `1px solid ${C.border}`,
                               borderRadius: 8, padding: '10px 14px',
                               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -784,7 +812,7 @@ export default function MultipleAnalyzerPage() {
             </h2>
             <div style={{ background: C.surface, border: `1px solid ${C.gold}`, borderRadius: 8, padding: 16 }}>
               {unmatchedGames.map((game, i) => (
-                <div key={i} style={{ color: C.muted, fontSize: 12, marginBottom: 4 }}>
+                <div key={`unmatched-${i}-${game.home || game.homeTeam || 'unknown'}-${game.away || game.awayTeam || 'unknown'}`} style={{ color: C.muted, fontSize: 12, marginBottom: 4 }}>
                   {game.home || game.homeTeam || '?'} x {game.away || game.awayTeam || '?'}
                 </div>
               ))}

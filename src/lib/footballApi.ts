@@ -668,3 +668,95 @@ export async function fetchOddsForCsvGames(
   
   return { oddsMap, fixtureMap, reqUsed: requestsUsed, matched, unmatched };
 }
+
+// ─── TESTE DE ODDS ENDPOINT ─────────────────────────────────────────────────────
+
+// 🆕 Função de teste temporária para explorar odds da API-Football
+async function testOddsEndpoint(fixtureId: string) {
+  const BASE = 'https://v3.football.api-sports.io';
+  const KEY = process.env.NEXT_PUBLIC_FOOTBALL_API_KEY!;
+  
+  // Testar diferentes bet IDs para chutes e cantos
+  const betIds = [
+    { id: 45, name: 'corners' },
+    { id: 46, name: 'corners_home' },
+    { id: 47, name: 'corners_away' },
+    { id: 55, name: 'shots_on_target' },
+    { id: 56, name: 'shots_total' },
+    { id: 57, name: 'shots_home' },
+  ];
+  
+  for (const bet of betIds) {
+    const url = `${BASE}/odds?fixture=${fixtureId}&bookmaker=8&bet=${bet.id}`;
+    const res = await fetch(url, {
+      headers: { 'x-apisports-key': KEY }
+    });
+    const data = await res.json();
+    
+    if (data.response?.length > 0) {
+      console.log(`\n✅ [ODDS-TEST] bet=${bet.id} (${bet.name}):`);
+      console.log(JSON.stringify(data.response[0], null, 2));
+    } else {
+      console.log(`❌ [ODDS-TEST] bet=${bet.id} (${bet.name}): sem dados`);
+    }
+  }
+}
+
+// 🆕 Teste genérico sem bet ID para ver todos os mercados disponíveis
+async function testAllOddsForFixture(fixtureId: string) {
+  const BASE = 'https://v3.football.api-sports.io';
+  const KEY = process.env.NEXT_PUBLIC_FOOTBALL_API_KEY!;
+  
+  const url = `${BASE}/odds?fixture=${fixtureId}&bookmaker=8`;
+  const res = await fetch(url, {
+    headers: { 'x-apisports-key': KEY }
+  });
+  const data = await res.json();
+  
+  console.log('[ODDS-ALL] Total mercados:', data.response?.[0]?.bookmakers?.[0]?.bets?.length);
+  data.response?.[0]?.bookmakers?.[0]?.bets?.forEach((bet: any) => {
+    console.log(`  bet.id=${bet.id} | ${bet.name}`);
+  });
+}
+
+// 🆕 Exportar funções de teste para uso temporário
+export { testOddsEndpoint, testAllOddsForFixture };
+
+// ─── TESTE ODDS API — FIXTURE IDs REAIS ─────────────────────────────────────────────
+
+// 🆕 Função de teste com fixture IDs reais do log
+async function testOddsFixture() {
+  const KEY = process.env.NEXT_PUBLIC_FOOTBALL_API_KEY!;
+  const fixtureId = 1378126; // Inter x Genoa — Serie A
+  
+  const res = await fetch(
+    `https://v3.football.api-sports.io/odds?fixture=${fixtureId}&bookmaker=8`,
+    { headers: { 'x-apisports-key': KEY } }
+  );
+  const data = await res.json();
+  
+  const bets = data.response?.[0]?.bookmakers?.[0]?.bets || [];
+  
+  console.log(`[ODDS-TEST] fixture=${fixtureId} | ${bets.length} mercados disponíveis`);
+  bets.forEach((bet: any) => {
+    console.log(`  [bet.id=${bet.id}] ${bet.name}`);
+    bet.values?.slice(0, 4).forEach((v: any) => {
+      console.log(`    → ${v.value}: ${v.odd}`);
+    });
+  });
+  
+  // Testar também Al-Fayha x Al Nassr (Pro League)
+  const res2 = await fetch(
+    `https://v3.football.api-sports.io/odds?fixture=1436126&bookmaker=8`,
+    { headers: { 'x-apisports-key': KEY } }
+  );
+  const data2 = await res2.json();
+  const bets2 = data2.response?.[0]?.bookmakers?.[0]?.bets || [];
+  console.log(`[ODDS-TEST] fixture=1436126 Al Nassr | ${bets2.length} mercados`);
+  bets2.forEach((bet: any) => {
+    console.log(`  [bet.id=${bet.id}] ${bet.name}`);
+  });
+}
+
+// 🆕 Chamar no início do analyzer (uma vez)
+// testOddsFixture(); // Desativado para não poluir console em produção
