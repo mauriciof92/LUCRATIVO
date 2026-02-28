@@ -287,6 +287,17 @@ export class PreLiveMultipleAnalyzer {
     return true;
   }
 
+  // Função auxiliar para calcular threshold dinâmico
+  private calcDynamicThreshold(lambda: number, lines: number[], minProb: number): number | null {
+    for (const line of [...lines].reverse()) {
+      const prob = poissonProb(lambda, line);
+      if (prob >= minProb) {
+        return line;
+      }
+    }
+    return null;
+  }
+
   // Verifica se odd está na faixa operável por mercado individual (amplo o suficiente para não descartar estatísticas boas)
   private isOddInRange(odd: number | null): boolean {
     if (!odd || odd <= 1.01) return false;
@@ -294,7 +305,7 @@ export class PreLiveMultipleAnalyzer {
     return true;
   }
 
-  // � Gera mercados FT seguros baseados em projeção HT
+  // Gera mercados FT seguros baseados em projeção HT
   private generateFTSafeMarkets(game: any): any[] {
     const profile = classifyProfile(game);
     const fav = getFavorito(game);
@@ -305,35 +316,61 @@ export class PreLiveMultipleAnalyzer {
       return ftMarkets;
     }
     
-    // CHUTES FT
+    // CHUTES FT — linha dinâmica
     if (fav.chFavGol >= 5.5) {
-      const threshold = fav.chFavGol >= 7.0 ? 11.5 : 9.5;
-      const safetyMargin = fav.chFavGol - (threshold - 4); // margem acima do corte
-      ftMarkets.push({
-        label: `${fav.nome} — Over ${threshold} Chutes FT`,
-        axis: 'chutes_ft',
-        odd: 1.70,        // ← ADICIONAR odd padrão
-        safetyMargin,
-        source: 'ft_projection',
-      });
+      const lambda = fav.chFavGol * 1.8;
+      const linhasChutes = [7.5, 8.5, 9.5, 10.5, 11.5, 12.5];
+      
+      // Encontrar linha mais alta com prob >= 0.70
+      let bestThreshold = null;
+      for (const linha of [...linhasChutes].reverse()) {
+        const prob = poissonProb(lambda, linha);
+        if (prob >= 0.70) {
+          bestThreshold = { linha, prob };
+          break;
+        }
+      }
+      
+      if (bestThreshold) {
+        ftMarkets.push({
+          label: `${fav.nome} — Over ${bestThreshold.linha} Chutes FT`,
+          axis: 'chutes_ft',
+          odd: 1.70,
+          prob: bestThreshold.prob,
+          gold: bestThreshold.prob >= 0.80,
+        });
+        console.log(`[FTBOX] ${fav.nome} chutes: lambda=${lambda.toFixed(1)} → linha=${bestThreshold.linha} prob=${(bestThreshold.prob*100).toFixed(0)}%`);
+      }
     }
     
-    // CANTOS FT
-    if (fav.cantFavHT >= 8.0) {
-      const threshold = fav.cantFavHT >= 10.0 ? 5.5 : 4.5;
-      const safetyMargin = fav.cantFavHT - (threshold - 2); // margem acima do corte
-      ftMarkets.push({
-        label: `${fav.nome} — Over ${threshold} Cantos FT`,
-        axis: 'cantos_ft',
-        odd: 1.85,        // ← ADICIONAR odd padrão
-        safetyMargin,
-        source: 'ft_projection',
-      });
+    // CANTOS FT — linha dinâmica
+    if (fav.cantFavHT >= 3.0) {
+      const lambda = fav.cantFavHT * 1.6;
+      const linhasCantos = [2.5, 3.5, 4.5, 5.5];
+      
+      let bestThreshold = null;
+      for (const linha of [...linhasCantos].reverse()) {
+        const prob = poissonProb(lambda, linha);
+        if (prob >= 0.70) {
+          bestThreshold = { linha, prob };
+          break;
+        }
+      }
+      
+      if (bestThreshold) {
+        ftMarkets.push({
+          label: `${fav.nome} — Over ${bestThreshold.linha} Cantos FT`,
+          axis: 'cantos_ft',
+          odd: 1.85,
+          prob: bestThreshold.prob,
+          gold: bestThreshold.prob >= 0.80,
+        });
+        console.log(`[FTBOX] ${fav.nome} cantos: lambda=${lambda.toFixed(1)} → linha=${bestThreshold.linha} prob=${(bestThreshold.prob*100).toFixed(0)}%`);
+      }
     }
     
     return ftMarkets;
   }
-
   // � Extrai MÚLTIPLOS mercados complementares de eixos diferentes para um jogo (Bet Builder)
   // ticketAxes: eixos já usados por outros jogos no bilhete — penaliza repetição
   private getGameMarkets(game: any, usedSigs: Set<string>, maxMarkets: number, ticketAxes?: Set<string>, isSinfonia: boolean = false): any[] {
@@ -886,10 +923,10 @@ export class PreLiveMultipleAnalyzer {
       // CHUTES FT
       if (fav.chFavGol >= 4.0) {
         const lambdaChutes = fav.chFavGol * 1.8;
-        const thresholdChutes = fav.chFavGol >= 6.0 ? 11.5 : 9.5;
-        const probChutes = poissonProb(lambdaChutes, thresholdChutes);
+        const thresholdChutes = this.calcDynamicThreshold(lambdaChutes, [7.5, 8.5, 9.5, 10.5, 11.5, 12.5], 0.70);
         
-        if (probChutes >= 0.60) {
+        if (thresholdChutes) {
+          const probChutes = poissonProb(lambdaChutes, thresholdChutes);
           gameMarkets.push({
             label: `${fav.nome} — Over ${thresholdChutes} Chutes FT`,
             axis: 'chutes_ft',
@@ -903,10 +940,10 @@ export class PreLiveMultipleAnalyzer {
       // CANTOS FT
       if (fav.cantFavHT >= 3.0) {
         const lambdaCantos = fav.cantFavHT * 1.6;
-        const thresholdCantos = fav.cantFavHT >= 7.5 ? 4.5 : 3.5;
-        const probCantos = poissonProb(lambdaCantos, thresholdCantos);
+        const thresholdCantos = this.calcDynamicThreshold(lambdaCantos, [2.5, 3.5, 4.5, 5.5], 0.70);
         
-        if (probCantos >= 0.60) {
+        if (thresholdCantos) {
+          const probCantos = poissonProb(lambdaCantos, thresholdCantos);
           gameMarkets.push({
             label: `${fav.nome} — Over ${thresholdCantos} Cantos FT`,
             axis: 'cantos_ft',
@@ -950,41 +987,56 @@ export class PreLiveMultipleAnalyzer {
 
       const gameMarkets: any[] = [];
 
-      // CHUTES FT — só se chFavGol >= 4.0 (reduzido para teste)
+      // CHUTES FT — linha dinâmica
       if (fav.chFavGol >= 4.0) {
         const lambdaChutes = fav.chFavGol * 1.8; // projeção FT
-        const thresholdChutes = fav.chFavGol >= 6.0 ? 11.5 : 9.5;
-        const probChutes = poissonProb(lambdaChutes, thresholdChutes);
-
-        console.log(`[SGP-ftbox-debug] ${fav.nome}: chFavGol=${fav.chFavGol}, lambda=${lambdaChutes.toFixed(1)}, threshold=${thresholdChutes}, prob=${(probChutes*100).toFixed(0)}%`);
-
-        if (probChutes >= 0.60) { // reduzido para teste
+        const linhasChutes = [7.5, 8.5, 9.5, 10.5, 11.5, 12.5];
+        
+        // Encontrar linha mais alta com prob >= 0.70
+        let bestThreshold = null;
+        for (const linha of [...linhasChutes].reverse()) {
+          const prob = poissonProb(lambdaChutes, linha);
+          if (prob >= 0.70) {
+            bestThreshold = { linha, prob };
+            break;
+          }
+        }
+        
+        if (bestThreshold) {
           gameMarkets.push({
-            label: `${fav.nome} — Over ${thresholdChutes} Chutes FT`,
+            label: `${fav.nome} — Over ${bestThreshold.linha} Chutes FT`,
             axis: 'chutes_ft',
             odd: 1.70,
-            prob: probChutes,
-            gold: probChutes >= 0.80,
+            prob: bestThreshold.prob,
+            gold: bestThreshold.prob >= 0.80,
           });
+          console.log(`[FTBOX-AUTO] ${fav.nome} chutes: lambda=${lambdaChutes.toFixed(1)} → linha=${bestThreshold.linha} prob=${(bestThreshold.prob*100).toFixed(0)}%`);
         }
       }
 
-      // CANTOS FT — threshold reduzido para 3.0 (teste)
+      // CANTOS FT — linha dinâmica
       if (fav.cantFavHT >= 3.0) {
         const lambdaCantos = fav.cantFavHT * 1.6; // projeção FT
-        const thresholdCantos = fav.cantFavHT >= 7.5 ? 4.5 : 3.5;
-        const probCantos = poissonProb(lambdaCantos, thresholdCantos);
-
-        console.log(`[SGP-ftbox-debug] ${fav.nome}: cantFavHT=${fav.cantFavHT}, lambda=${lambdaCantos.toFixed(1)}, threshold=${thresholdCantos}, prob=${(probCantos*100).toFixed(0)}%`);
-
-        if (probCantos >= 0.60) { // reduzido para teste
+        const linhasCantos = [2.5, 3.5, 4.5, 5.5];
+        
+        let bestThreshold = null;
+        for (const linha of [...linhasCantos].reverse()) {
+          const prob = poissonProb(lambdaCantos, linha);
+          if (prob >= 0.70) {
+            bestThreshold = { linha, prob };
+            break;
+          }
+        }
+        
+        if (bestThreshold) {
           gameMarkets.push({
-            label: `${fav.nome} — Over ${thresholdCantos} Cantos FT`,
+            label: `${fav.nome} — Over ${bestThreshold.linha} Cantos FT`,
             axis: 'cantos_ft',
             odd: 1.85,
-            prob: probCantos,
-            gold: probCantos >= 0.80,
+            prob: bestThreshold.prob,
+            gold: bestThreshold.prob >= 0.80,
           });
+          console.log(`[FTBOX-AUTO] ${fav.nome} cantos: lambda=${lambdaCantos.toFixed(1)} → linha=${bestThreshold.linha} prob=${(bestThreshold.prob*100).toFixed(0)}%`);
         }
       }
 
@@ -1000,28 +1052,27 @@ export class PreLiveMultipleAnalyzer {
       }
     }
 
-    // 🆕 Ordenar: 1) Ambos mercados, 2) Só chutes, 3) Só cantos
-    ftBoxCandidates.sort((a, b) => {
-      // Prioridade 1: jogos com ambos os mercados
-      if (a.hasBoth && !b.hasBoth) return -1;
-      if (!a.hasBoth && b.hasBoth) return 1;
-      
-      // Prioridade 2: mais mercados OURO
-      if (b.goldCount !== a.goldCount) return b.goldCount - a.goldCount;
-      
-      // Prioridade 3: maior score
-      return b.score - a.score;
-    });
+    // 🆕 Ordenar: jogos com AMBOS mercados (par completo) primeiro
+    const sorted = [...ftBoxCandidates].sort((a, b) =>
+      b.markets.length - a.markets.length || b.score - a.score
+    );
 
     // Máximo 1 jogo por partida (não 2 mercados do mesmo jogo)
     const usedFixtures = new Set<string>();
     const ftBoxGames: any[] = [];
 
-    for (const candidate of ftBoxCandidates) {
-      const fixtureKey = candidate.game.homeTeam + candidate.game.awayTeam;
-      if (usedFixtures.has(fixtureKey)) continue;
-      usedFixtures.add(fixtureKey);
-      ftBoxGames.push(candidate);
+    for (const candidate of sorted) {
+      // DEBUG: descobrir estrutura real do objeto
+      console.log('[FTBOX-DEBUG] candidate keys:', JSON.stringify(Object.keys(candidate)));
+      console.log('[FTBOX-DEBUG] candidate.game:', JSON.stringify(candidate.game));
+      
+      const key = `${candidate.game.home}|${candidate.game.away}`;
+      if (usedFixtures.has(key)) {
+        console.log(`[FTBOX] Pulando fixture duplicado: ${key}`);
+        continue;
+      }
+      usedFixtures.add(key);
+      ftBoxGames.push(candidate); // inclui TODOS os mercados do jogo (par)
       if (ftBoxGames.length >= 3) break;
     }
 
@@ -1111,13 +1162,48 @@ export class PreLiveMultipleAnalyzer {
       let odd = 1.70;
 
       if (marketType === 'chutes_ft') {
-        const threshold = fav.chFavGol >= 6.0 ? 11.5 : 9.5;
-        marketLabel = `${fav.nome} — Over ${threshold} Chutes FT`;
-        odd = 1.70;
+        const lambda = fav.chFavGol * 1.8;
+        const linhasChutes = [7.5, 8.5, 9.5, 10.5, 11.5, 12.5];
+        
+        // Encontrar linha mais alta com prob >= 0.70
+        let bestThreshold = null;
+        for (const linha of [...linhasChutes].reverse()) {
+          const prob = poissonProb(lambda, linha);
+          if (prob >= 0.70) {
+            bestThreshold = { linha, prob };
+            break;
+          }
+        }
+        
+        if (bestThreshold) {
+          marketLabel = `${fav.nome} — Over ${bestThreshold.linha} Chutes FT`;
+          odd = 1.70;
+        } else {
+          // Fallback se nenhuma linha atingir 70%
+          marketLabel = `${fav.nome} — Over 9.5 Chutes FT`;
+          odd = 1.70;
+        }
       } else if (marketType === 'cantos_ft') {
-        const threshold = fav.cantFavHT >= 7.5 ? 4.5 : 3.5;
-        marketLabel = `${fav.nome} — Over ${threshold} Cantos FT`;
-        odd = 1.85;
+        const lambda = fav.cantFavHT * 1.6;
+        const linhasCantos = [2.5, 3.5, 4.5, 5.5];
+        
+        let bestThreshold = null;
+        for (const linha of [...linhasCantos].reverse()) {
+          const prob = poissonProb(lambda, linha);
+          if (prob >= 0.70) {
+            bestThreshold = { linha, prob };
+            break;
+          }
+        }
+        
+        if (bestThreshold) {
+          marketLabel = `${fav.nome} — Over ${bestThreshold.linha} Cantos FT`;
+          odd = 1.85;
+        } else {
+          // Fallback se nenhuma linha atingir 70%
+          marketLabel = `${fav.nome} — Over 3.5 Cantos FT`;
+          odd = 1.85;
+        }
       }
 
       return {

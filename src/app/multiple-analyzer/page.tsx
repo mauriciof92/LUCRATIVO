@@ -7,6 +7,21 @@ import { PreLiveMultipleAnalyzer } from '../../lib/pre-live-multiple-analyzer';
 import type { PreMatchOdds } from '../../lib/footballApi';
 import { C, KPI, EmptyState, ProfileBadge } from '../../components/ui';
 
+// Importar poissonProb para cálculo dinâmico
+function poissonProb(lambda: number, k: number): number {
+  // P(X > k) = probabilidade de superar a linha k
+  let cdf = 0;
+  for (let i = 0; i <= Math.floor(k); i++) {
+    cdf += (Math.exp(-lambda) * Math.pow(lambda, i)) / factorial(i);
+  }
+  return 1 - cdf;
+}
+
+function factorial(n: number): number {
+  if (n <= 1) return 1;
+  return n * factorial(n - 1);
+}
+
 const TICKET_STYLES: Record<string, { label: string; color: string; icon: string }> = {
   bronze:    { label: 'Seguro',    color: '#58a6ff', icon: '🛡️' },
   silver:    { label: 'Padrão',    color: '#c0c0c0', icon: '⚖️' },
@@ -112,26 +127,69 @@ export default function MultipleAnalyzerPage() {
 
     const markets = [];
 
-    // Chutes FT
+    // CHUTES FT — linha dinâmica
     if (fav.chFavGol >= 4.0) {
-      const threshold = fav.chFavGol >= 6.0 ? 11.5 : 9.5;
-      markets.push({
-        key: `${game.match || `${game.home} x ${game.away}`}|chutes_ft`,
-        label: `${fav.nome} — Over ${threshold} Chutes FT`,
-        axis: 'chutes_ft',
-        odd: 1.70,
-      });
+      const lambda = fav.chFavGol * 1.8;
+      const linhasChutes = [7.5, 8.5, 9.5, 10.5, 11.5, 12.5];
+      
+      // Encontrar linha mais alta com prob >= 0.70
+      let bestThreshold = null;
+      for (const linha of [...linhasChutes].reverse()) {
+        const prob = poissonProb(lambda, linha);
+        if (prob >= 0.70) {
+          bestThreshold = { linha, prob };
+          break;
+        }
+      }
+      
+      if (bestThreshold) {
+        markets.push({
+          key: `${game.match || `${game.home} x ${game.away}`}|chutes_ft`,
+          label: `${fav.nome} — Over ${bestThreshold.linha} Chutes FT`,
+          axis: 'chutes_ft',
+          odd: 1.70,
+        });
+      } else {
+        // Fallback se nenhuma linha atingir 70%
+        markets.push({
+          key: `${game.match || `${game.home} x ${game.away}`}|chutes_ft`,
+          label: `${fav.nome} — Over 9.5 Chutes FT`,
+          axis: 'chutes_ft',
+          odd: 1.70,
+        });
+      }
     }
 
-    // Cantos FT
-    if (fav.cantFavHT >= 5.5) {
-      const threshold = fav.cantFavHT >= 7.5 ? 4.5 : 3.5;
-      markets.push({
-        key: `${game.match || `${game.home} x ${game.away}`}|cantos_ft`,
-        label: `${fav.nome} — Over ${threshold} Cantos FT`,
-        axis: 'cantos_ft',
-        odd: 1.85,
-      });
+    // CANTOS FT — linha dinâmica
+    if (fav.cantFavHT >= 3.0) {
+      const lambda = fav.cantFavHT * 1.6;
+      const linhasCantos = [2.5, 3.5, 4.5, 5.5];
+      
+      let bestThreshold = null;
+      for (const linha of [...linhasCantos].reverse()) {
+        const prob = poissonProb(lambda, linha);
+        if (prob >= 0.70) {
+          bestThreshold = { linha, prob };
+          break;
+        }
+      }
+      
+      if (bestThreshold) {
+        markets.push({
+          key: `${game.match || `${game.home} x ${game.away}`}|cantos_ft`,
+          label: `${fav.nome} — Over ${bestThreshold.linha} Cantos FT`,
+          axis: 'cantos_ft',
+          odd: 1.85,
+        });
+      } else {
+        // Fallback se nenhuma linha atingir 70%
+        markets.push({
+          key: `${game.match || `${game.home} x ${game.away}`}|cantos_ft`,
+          label: `${fav.nome} — Over 3.5 Cantos FT`,
+          axis: 'cantos_ft',
+          odd: 1.85,
+        });
+      }
     }
 
     return markets;
