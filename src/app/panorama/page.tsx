@@ -260,8 +260,19 @@ export default function PanoramaPage() {
     };
     
     const isGameStarted = (game: any) => {
-      const gameTime = extractTime(game.hour);
-      return gameTime <= currentTime;
+      const raw = game.hour ?? '';
+      // Tentar parse de "DD-MM-YYYY HH:MM"
+      const match = raw.match(/^(\d{2})-(\d{2})-(\d{4})\s+(\d{2}):(\d{2})/);
+      if (!match) return false;
+      
+      const [, day, month, year, hh, mm] = match;
+      const gameDateTime = new Date(
+        Number(year), Number(month) - 1, Number(day),
+        Number(hh), Number(mm)
+      );
+      
+      // Só considerar iniciado se a data+hora do jogo já passou
+      return gameDateTime <= new Date();
     };
     
     list = list.filter((g: any) => !isGameStarted(g));
@@ -279,7 +290,12 @@ export default function PanoramaPage() {
       const mk = filterMarket.toLowerCase();
       const mainLabel = (g.mainMarket?.label ?? '').toLowerCase();
       const comboLabels = (g.combo ?? []).map((c: any) => (c.label ?? '').toLowerCase());
-      return mainLabel.includes(mk) || comboLabels.some((l: string) => l.includes(mk));
+      const patternLabels = (g.patternLines ?? []).map((p: any) => (p.label ?? '').toLowerCase());
+      const extraLabels = (g.extraMarkets ?? []).map((e: any) => (e.label ?? '').toLowerCase());
+      return mainLabel.includes(mk)
+        || comboLabels.some((l: string) => l.includes(mk))
+        || patternLabels.some((l: string) => l.includes(mk))
+        || extraLabels.some((l: string) => l.includes(mk));
     });
 
     return list.sort((a: any, b: any) =>
