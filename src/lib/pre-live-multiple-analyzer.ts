@@ -374,10 +374,11 @@ export class PreLiveMultipleAnalyzer {
     const l = label.toLowerCase();
     const isHT = l.includes('finaliza') || l.includes('chute') ||
       ((l.includes('canto') || l.includes('escanteio')) && l.includes('ht'));
-    const isFT = l.includes('ft') && (l.includes('chute') || l.includes('canto') || l.includes('escanteio'));
+    // 🆕 Verificação FT: só bloquear finalizações, não cantos
+    const isFT = l.includes('ft') && (l.includes('chute') || l.includes('finaliza'));
     
     if (isHT && !this.allowsHTFinalizations(league)) return false;
-    if (isFT && !this.allowsFTFinalizations(league)) return false;  // 🆕 Verificação FT
+    if (isFT && !this.allowsFTFinalizations(league)) return false;  // 🆕 Verificação FT (apenas finalizações)
     
     return true;
   }

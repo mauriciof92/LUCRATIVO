@@ -84,12 +84,12 @@ function _REMOVED(headers) {
       /\bexg\b.*\bexpectativa\b.*\bgols\b/,
       /\bexpectativa\b.*\bgols\b.*\bmedia\s*final\b/,
       /\bglobal\b.*\bexg\b/,
-    ], 27),
+    ], 25),  // ✅ CORRIGIDO: coluna 25 (exG)
     exC:         find([
       /\bexc\b.*\bexpectativa\b.*\bescanteios\b/,
       /\bexpectativas?\b.*\bescanteios\b/,
       /\bglobal\b.*\bexc\b/,
-    ], 28),
+    ], 26),  // ✅ CORRIGIDO: coluna 26 (exC)
 
     // CV gols (FT, excluir HT e cantos)
     cv:          find([
@@ -474,6 +474,7 @@ export function parseCSV(text) {
   const games = rows.map((r, i) => {
     const v = r.split(sep).map(stripQ);
     if (v.length < 9) return null; // linha malformada ou cabeçalho residual
+    
     const exGraw  = toNum(v[idx.exG]);
 
     const golHA = toPipe(v[idx.golsAvgHA]);
@@ -827,7 +828,7 @@ export function suggestMainMarket(g) {
       return { label: `${fav.lado} ${fav.nome} — Over 3.5 Cantos HT`, axis: "cantos_ht", icon: "🚩", color: "#00c2ff" };
     }
     // Fallback para cantos FT se HT não viável
-    if (g.exC >= 12.0 && (g.cvCantos || 0) <= 45) {
+    if (g.exC >= 10.0 && (g.cvCantos || 0) <= 45) {
       return { label: "Over 8.5 Cantos FT", axis: "cantos", icon: "🚩", color: "#00c2ff" };
     }
   }
@@ -892,8 +893,8 @@ export function suggestMainMarket(g) {
       return { label: "Over 1.5 FT", axis: "gols", icon: "⚽", color: "#00e676" };
 
     case "corner_dominant": {
-      // Buffer extremo v1.2: exC >= 12.0 + cvCantos <= 40 (consistência de elite)
-      if (g.exC >= 12.0 && (g.cvCantos || 0) <= 40) return { label: "Over 8.5 Cantos FT", axis: "cantos", icon: "🚩", color: "#00c2ff" };
+      // Buffer extremo v1.2: exC >= 10.0 + cvCantos <= 40 (consistência de elite)
+      if (g.exC >= 10.0 && (g.cvCantos || 0) <= 40) return { label: "Over 8.5 Cantos FT", axis: "cantos", icon: "🚩", color: "#00c2ff" };
       return null;
     }
     
@@ -905,7 +906,7 @@ export function suggestMainMarket(g) {
       
       if (cantHFav >= thresholdCantos && (g.cvCantosHT || 0) <= cvCantosLimit)
         return { label: `${fav.lado} ${fav.nome} — Over 3.5 Cantos HT`, axis: "cantos_ht", icon: "🚩", color: "#00c2ff" };
-      if (g.exC >= 12.0 && (g.cvCantos || 0) <= 40)
+      if (g.exC >= 10.0 && (g.cvCantos || 0) <= 40)
         return { label: "Over 8.5 Cantos FT", axis: "cantos", icon: "🚩", color: "#00c2ff" };
       return null;
     }
@@ -920,7 +921,7 @@ export function suggestMainMarket(g) {
 
     default:
       if (g.exG >= 3.5)                              return { label: "Over 2.5 FT",       axis: "gols",   icon: "⚽", color: "#00e676"  };
-      if (g.exC >= 12.0 && g.cvCantos <= 40)        return { label: "Over 8.5 Cantos FT", axis: "cantos", icon: "🚩", color: "#00c2ff" };
+      if (g.exC >= 10.0 && g.cvCantos <= 40)        return { label: "Over 8.5 Cantos FT", axis: "cantos", icon: "🚩", color: "#00c2ff" };
       return null;
   }
 }
@@ -1033,8 +1034,8 @@ export function suggestCombo(g) {
     cands.push({ label: `${fav.lado} ${fav.nome} — Over ${linhaCantos} Cantos HT`, axis: "cantos_ht", icon: "🚩" });
   }
 
-  // Cantos FT — buffer extremo v1.2: APPG >= 0.90 + exC >= 12.0 + cvCantos <= 40 (elite)
-  if (main.axis !== "cantos" && main.axis !== "cantos_ht" && g.exC >= 12.0 && g.cvCantos <= 40 && favAppg >= 0.90) {
+  // Cantos FT — buffer extremo v1.2: APPG >= 0.90 + exC >= 10.0 + cvCantos <= 40 (elite)
+  if (main.axis !== "cantos" && main.axis !== "cantos_ht" && g.exC >= 10.0 && g.cvCantos <= 40 && favAppg >= 0.90) {
     // Usar estatísticas de cantos por período para decisão mais inteligente
     const cantos0a10 = g.mediaEscanteios0a10 || 0;
     const cantos11a20 = g.mediaEscanteios11a20 || 0;
