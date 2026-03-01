@@ -133,7 +133,7 @@ export default function MultipleAnalyzerPage() {
     }).filter(m => m.game);
 
     try {
-      const customBox = analyzer.buildCustomFTBox(selectedGamesData, selectedMarketsData);
+      const customBox = await analyzer.buildCustomFTBox(selectedGamesData, selectedMarketsData);
       if (customBox) {
         setCustomFTBox(customBox);
         setError('');
@@ -145,12 +145,18 @@ export default function MultipleAnalyzerPage() {
     }
   };
 
-  // 🆕 Obter mercados FT disponíveis para um jogo
-  const getFTMarketsForGame = (game: any) => {
+  // 🆕 Obter mercados FT disponíveis para um jogo (com odds reais)
+  const getFTMarketsForGame = async (game: any) => {
     const fav = (analyzer as any).getFavorito?.(game);
     if (!fav) return [];
 
     const markets = [];
+
+    // 🆕 BUSCAR ODDS REAIS DA API
+    let realOdds: { cornersLines: any[], shotsLines: any[] } = { cornersLines: [], shotsLines: [] };
+    if (game.apiFixtureId) {
+      realOdds = await (analyzer as any).fetchRealOdds(game.apiFixtureId);
+    }
 
     // CHUTES FT — linha dinâmica
     if (fav.chFavGol >= 4.0) {
@@ -168,11 +174,29 @@ export default function MultipleAnalyzerPage() {
       }
       
       if (bestThreshold) {
+        let odd = 1.70; // fallback
+        let oddsSource = 'fallback';
+        
+        // 🆕 Tentar usar odds reais
+        if (realOdds.shotsLines.length > 0) {
+          const closestLine = realOdds.shotsLines.reduce((closest: any, current: any) => {
+            const currentDiff = Math.abs(current.line - bestThreshold.linha);
+            const closestDiff = Math.abs(closest.line - bestThreshold.linha);
+            return currentDiff < closestDiff ? current : closest;
+          });
+          
+          if (Math.abs(closestLine.line - bestThreshold.linha) <= 1.5) {
+            odd = closestLine.odd;
+            oddsSource = 'api-real';
+          }
+        }
+        
         markets.push({
           key: `${game.match || `${game.home} x ${game.away}`}|chutes_ft`,
           label: `${fav.nome} — Over ${bestThreshold.linha} Chutes FT`,
           axis: 'chutes_ft',
-          odd: 1.70,
+          odd: odd,
+          source: oddsSource,
         });
       } else {
         // Fallback se nenhuma linha atingir 70-82%
@@ -181,6 +205,7 @@ export default function MultipleAnalyzerPage() {
           label: `${fav.nome} — Over 9.5 Chutes FT`,
           axis: 'chutes_ft',
           odd: 1.70,
+          source: 'fallback',
         });
       }
     }
@@ -200,11 +225,29 @@ export default function MultipleAnalyzerPage() {
       }
       
       if (bestThreshold) {
+        let odd = 1.85; // fallback
+        let oddsSource = 'fallback';
+        
+        // 🆕 Tentar usar odds reais
+        if (realOdds.cornersLines.length > 0) {
+          const closestLine = realOdds.cornersLines.reduce((closest: any, current: any) => {
+            const currentDiff = Math.abs(current.line - bestThreshold.linha);
+            const closestDiff = Math.abs(closest.line - bestThreshold.linha);
+            return currentDiff < closestDiff ? current : closest;
+          });
+          
+          if (Math.abs(closestLine.line - bestThreshold.linha) <= 1.0) {
+            odd = closestLine.odd;
+            oddsSource = 'api-real';
+          }
+        }
+        
         markets.push({
           key: `${game.match || `${game.home} x ${game.away}`}|cantos_ft`,
           label: `${fav.nome} — Over ${bestThreshold.linha} Cantos FT`,
           axis: 'cantos_ft',
-          odd: 1.85,
+          odd: odd,
+          source: oddsSource,
         });
       } else {
         // Fallback se nenhuma linha atingir 70-82%
@@ -213,6 +256,7 @@ export default function MultipleAnalyzerPage() {
           label: `${fav.nome} — Over 3.5 Cantos FT`,
           axis: 'cantos_ft',
           odd: 1.85,
+          source: 'fallback',
         });
       }
     }
@@ -275,6 +319,11 @@ export default function MultipleAnalyzerPage() {
     const updated = [...ignoredMatches, matchName];
     setIgnoredMatches(updated);
     regenerateTickets(updated);
+  };
+
+  const handleIgnoreMatchClick = (matchName: string) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    handleIgnoreMatch(matchName);
   };
 
   // 🔄 Handler: Limpar todos os jogos ignorados e regerar
@@ -342,6 +391,7 @@ export default function MultipleAnalyzerPage() {
 
             <button
               onClick={() => setShowFTBoxBuilder(!showFTBoxBuilder)}
+              disabled={false}
               style={{
                 background: showFTBoxBuilder ? C.gold : C.surface,
                 color: showFTBoxBuilder ? 'white' : C.text,
@@ -393,7 +443,7 @@ export default function MultipleAnalyzerPage() {
             </p>
 
             <div style={{ display: 'grid', gap: 16, maxHeight: 400, overflowY: 'auto' }}>
-              {ftBoxCandidates.map((candidate: any) => {
+              {ftBoxCandidates.map((candidate: any, candidateIndex: number) => {
                 const game = candidate.game;
                 const gameKey = game.match || `${game.home} x ${game.away}`;
                 const isSelected = selectedGames.has(gameKey);
@@ -402,7 +452,7 @@ export default function MultipleAnalyzerPage() {
                 if (ftMarkets.length === 0) return null;
 
                 return (
-                  <div key={gameKey} style={{
+                  <div key={`ftbox-candidate-${candidateIndex}-${gameKey}`} style={{
                     background: isSelected ? `${C.gold}20` : 'transparent',
                     border: `1px solid ${isSelected ? C.gold : C.border}`,
                     borderRadius: 8, padding: 12,
@@ -467,6 +517,7 @@ export default function MultipleAnalyzerPage() {
                                 textDecoration: axisConflict && !isMarketSelected ? 'line-through' : 'none'
                               }}>
                                 {market.label} @ {market.odd}
+                                {market.source === 'api-real' && ' 🟢'}
                                 {axisConflict && !isMarketSelected && ' (conflito)'}
                               </span>
                             </div>
@@ -490,6 +541,7 @@ export default function MultipleAnalyzerPage() {
                     setSelectedMarkets(new Set());
                     setCustomFTBox(null);
                   }}
+                  disabled={false}
                   style={{
                     background: 'transparent', border: `1px solid ${C.muted}`,
                     borderRadius: 6, padding: '8px 16px', fontSize: 12,
@@ -604,6 +656,7 @@ export default function MultipleAnalyzerPage() {
                   {ignoredMatches.length > 0 && (
                     <button
                       onClick={handleClearIgnored}
+                      disabled={false}
                       style={{
                         background: 'transparent', border: `1px solid ${C.muted}`,
                         borderRadius: 6, padding: '4px 10px', fontSize: 11,
@@ -669,8 +722,9 @@ export default function MultipleAnalyzerPage() {
                                       {gameOdd > 1 ? gameOdd.toFixed(2) : '—'}
                                     </div>
                                     <button
-                                      onClick={() => handleIgnoreMatch(match)}
+                                      onClick={handleIgnoreMatchClick(match)}
                                       title={`Trocar ${match} por outro jogo`}
+                                      disabled={false}
                                       style={{
                                         background: 'transparent', border: `1px solid ${C.muted}40`,
                                         borderRadius: 6, padding: '3px 8px', fontSize: 12,

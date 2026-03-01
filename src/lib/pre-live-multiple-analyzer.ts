@@ -1055,6 +1055,7 @@ export class PreLiveMultipleAnalyzer {
             odd: realOdd,
             prob: probChutes,
             gold: probChutes >= 0.80,
+            source: oddsSource,
           });
           console.log(`[FTBOX-MANUAL] ${fav.nome} chutes: linha=${thresholdChutes} odd=${realOdd} (${oddsSource})`);
         }
@@ -1090,6 +1091,7 @@ export class PreLiveMultipleAnalyzer {
             odd: realOdd,
             prob: probCantos,
             gold: probCantos >= 0.80,
+            source: oddsSource,
           });
           console.log(`[FTBOX-MANUAL] ${fav.nome} cantos: linha=${thresholdCantos} odd=${realOdd} (${oddsSource})`);
         }
@@ -1180,6 +1182,7 @@ export class PreLiveMultipleAnalyzer {
             odd: realOdd,
             prob: bestThreshold.prob,
             gold: bestThreshold.prob >= 0.80,
+            source: oddsSource,
           });
           console.log(`[FTBOX-AUTO] ${fav.nome} chutes: lambda=${lambdaChutes.toFixed(1)} → linha=${bestThreshold.linha} prob=${(bestThreshold.prob*100).toFixed(0)}% odd=${realOdd} (${oddsSource})`);
         }
@@ -1230,6 +1233,7 @@ export class PreLiveMultipleAnalyzer {
             odd: realOdd,
             prob: bestThreshold.prob,
             gold: bestThreshold.prob >= 0.80,
+            source: oddsSource,
           });
           console.log(`[FTBOX-AUTO] ${fav.nome} cantos: lambda=${lambdaCantos.toFixed(1)} → linha=${bestThreshold.linha} prob=${(bestThreshold.prob*100).toFixed(0)}% odd=${realOdd} (${oddsSource})`);
         }

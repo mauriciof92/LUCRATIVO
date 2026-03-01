@@ -321,17 +321,19 @@ export function runBacktest(csvText: string, options: { useRiskManagement?: bool
 function resolveWithRealStats(label: string, real: RealStats): "win" | "lose" | "push" | "no-odd" | "pending_manual" {
   const nl = label.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
 
-  // 🆕 Debug de validação - Exibir objeto completo da API
-  console.log(`[VALIDATION-DEBUG] Resolvendo mercado: ${label}`, {
-    label,
-    realStats: real,
-    shotsHTFav: real.shotsHTFav,
-    totalShotsHTFav: real.totalShotsHTFav,
-    cornersHTFav: real.cornersHTFav,
-    cornersHTTotal: real.cornersHTTotal,
-    shotsHTSource: real.shotsHTSource,
-    cornersSource: real.cornersSource
-  });
+  // 🆕 Debug de validação desabilitado para reduzir poluição visual
+  // if (process.env.NODE_ENV === 'development') {
+  //   console.log(`[VALIDATION-DEBUG] Resolvendo mercado: ${label}`, {
+  //     label,
+  //     realStats: real,
+  //     shotsHTFav: real.shotsHTFav,
+  //     totalShotsHTFav: real.totalShotsHTFav,
+  //     cornersHTFav: real.cornersHTFav,
+  //     cornersHTTotal: real.cornersHTTotal,
+  //     shotsHTSource: real.shotsHTSource,
+  //     cornersSource: real.cornersSource
+  //   });
+  // }
 
   // 🆕 TAREFA 1: Lógica de 'Dado Ausente'
   // Verificar se dados HT são null, undefined ou 0
@@ -343,18 +345,25 @@ function resolveWithRealStats(label: string, real: RealStats): "win" | "lose" | 
   if (nl.includes("finalizac") || nl.includes("chute")) {
     const shots = real.shotsHTFav;
     const totalShots = real.totalShotsHTFav;
-    console.log(`[VALIDATION-DEBUG] Finalizações HT: ${shots} (source: ${real.shotsHTSource}) | Total: ${totalShots}`);
+    // Debug desabilitado para reduzir poluição visual
+    // if (process.env.NODE_ENV === 'development') {
+    //   console.log(`[VALIDATION-DEBUG] Finalizações HT: ${shots} (source: ${real.shotsHTSource}) | Total: ${totalShots}`);
+    // }
     
     // 🆕 Se dado ausente, retornar pending_manual
     if (isShotsDataAbsent) {
-      console.log(`[VALIDATION-DEBUG] Dado de finalizações ausente → PENDING_MANUAL`);
+      // if (process.env.NODE_ENV === 'development') {
+      //   console.log(`[VALIDATION-DEBUG] Dado de finalizações ausente → PENDING_MANUAL`);
+      // }
       return "pending_manual";
     }
     
     // 🆕 Mapeamento alternativo: usar totalShots se shotsHTFav for 0
     const effectiveShots = shots > 0 ? shots : totalShots;
     if (shots === 0 && totalShots > 0) {
-      console.log(`[VALIDATION-DEBUG] Usando totalShots (${totalShots}) como fallback para shotsHTFav=0`);
+      // if (process.env.NODE_ENV === 'development') {
+      //   console.log(`[VALIDATION-DEBUG] Usando totalShots (${totalShots}) como fallback para shotsHTFav=0`);
+      // }
     }
     
     if (nl.includes("over 6.5")) return effectiveShots >= 7 ? "win" : "lose";
@@ -368,11 +377,16 @@ function resolveWithRealStats(label: string, real: RealStats): "win" | "lose" | 
   if (nl.includes("canto") || nl.includes("escanteio")) {
     if (nl.includes("ht") || nl.includes("1 temp")) {
       const c = real.cornersHTFav;
-      console.log(`[VALIDATION-DEBUG] Cantos HT favorito: ${c} (source: ${real.cornersSource})`);
+      // Debug desabilitado para reduzir poluição visual
+      // if (process.env.NODE_ENV === 'development') {
+      //   console.log(`[VALIDATION-DEBUG] Cantos HT favorito: ${c} (source: ${real.cornersSource})`);
+      // }
       
       // 🆕 Se dado ausente, retornar pending_manual
       if (isCornersDataAbsent) {
-        console.log(`[VALIDATION-DEBUG] Dado de cantos ausente → PENDING_MANUAL`);
+        // if (process.env.NODE_ENV === 'development') {
+        //   console.log(`[VALIDATION-DEBUG] Dado de cantos ausente → PENDING_MANUAL`);
+        // }
         return "pending_manual";
       }
       
@@ -381,13 +395,17 @@ function resolveWithRealStats(label: string, real: RealStats): "win" | "lose" | 
       if (nl.includes("over 1.5")) return c >= 2 ? "win" : "lose";
       // Total HT cantos
       const tot = real.cornersHTTotal;
-      console.log(`[VALIDATION-DEBUG] Cantos HT total: ${tot} (source: ${real.cornersSource})`);
+      // if (process.env.NODE_ENV === 'development') {
+      //   console.log(`[VALIDATION-DEBUG] Cantos HT total: ${tot} (source: ${real.cornersSource})`);
+      // }
       if (nl.includes("over 5.5")) return tot >= 6 ? "win" : "lose";
       if (nl.includes("over 4.5")) return tot >= 5 ? "win" : "lose";
     }
     // Cantos FT total
     const ft = real.cornersFTTotal;
-    console.log(`[VALIDATION-DEBUG] Cantos FT total: ${ft} (source: ${real.cornersSource})`);
+    // if (process.env.NODE_ENV === 'development') {
+    //   console.log(`[VALIDATION-DEBUG] Cantos FT total: ${ft} (source: ${real.cornersSource})`);
+    // }
     if (nl.includes("over 9.5")) return ft >= 10 ? "win" : "lose";
     if (nl.includes("over 8.5")) return ft >= 9  ? "win" : "lose";
     if (nl.includes("over 7.5")) return ft >= 8  ? "win" : "lose";

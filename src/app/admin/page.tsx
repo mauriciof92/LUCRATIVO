@@ -33,6 +33,54 @@ export default function AdminPage() {
     
   } = useBacktest();
 
+  // 🆕 Estados para odds reais (similar ao multiple-analyzer)
+  const [loadingOdds, setLoadingOdds] = useState(false);
+  const [odds, setOdds] = useState<any>({});
+  const [unmatchedGames, setUnmatchedGames] = useState<any[]>([]);
+
+  // 🆕 Handler para buscar odds reais (baseado no multiple-analyzer)
+  const handleFetchRealOdds = async () => {
+    if (results.length === 0) {
+      alert("❌ Nenhum jogo encontrado. Importe o CSV primeiro!");
+      return;
+    }
+    
+    setLoadingOdds(true);
+    try {
+      // Converter resultados para formato CSV
+      const csvText = results.map(r => 
+        `${r.hour},${r.match},${r.league},${r.mainMarket.label},${r.mainMarket.odd},${r.mainMarket.result || ''}`
+      ).join('\n');
+      
+      // API key é lida server-side pelo route handler
+      const today = new Date().toISOString().split('T')[0];
+      const res = await fetch('/api/football-odds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csvText, date: today }),
+      });
+      
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `HTTP ${res.status}`);
+      }
+      
+      const result = await res.json();
+      setOdds(result.oddsMap ?? {});
+      setUnmatchedGames(result.unmatched ?? []);
+      
+      const oddsCount = Object.keys(result.oddsMap ?? {}).length;
+      const unmatchedCount = (result.unmatched ?? []).length;
+      
+      alert(`✅ Odds reais buscadas com sucesso!\n📊 ${oddsCount} jogos com odds reais\n⚠️ ${unmatchedCount} jogos não encontrados na API\n\nVerifique o console para logs detalhados.`);
+      
+    } catch (e: any) {
+      alert("❌ Erro ao buscar odds: " + (e?.message ?? String(e)));
+    } finally {
+      setLoadingOdds(false);
+    }
+  };
+
   // 🆕 Estados para fluxo unificado
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [csvPreview, setCsvPreview] = useState<string>('');
@@ -470,39 +518,92 @@ export default function AdminPage() {
         
         <div style={{ marginBottom: "16px" }}>
           <div style={{ fontSize: "14px", color: C.muted, marginBottom: "12px" }}>
-            Forçar enriquecimento com API-Football para ver logs [FALLBACK] e diagnóstico.
+            Buscar odds reais da API-Football (Bet365) para múltiplas e FT Box Builder.
           </div>
           
           <button
-            onClick={async () => {
-              if (!confirm("⚠️ Isso irá enriquecer todos os jogos FT com dados da API. Continuar?")) return;
-              try {
-                const apiKey = localStorage.getItem('football-api-key');
-                if (!apiKey) {
-                  alert("❌ Configure API key primeiro!");
-                  return;
-                }
-                await enrichWithOdds(apiKey);
-                alert(`✅ Enriquecimento concluído! Verifique o console para logs [FALLBACK].`);
-              } catch (e: any) {
-                alert("❌ Erro: " + (e?.message ?? String(e)));
-              }
-            }}
-            disabled={enriching}
+            onClick={handleFetchRealOdds}
+            disabled={loadingOdds}
             style={{
-              background: enriching ? C.gray : C.blue,
+              background: loadingOdds ? C.gray : C.green,
               color: "white",
               border: "none",
               borderRadius: "8px",
               padding: "12px 24px",
               fontSize: "14px",
               fontWeight: 600,
-              cursor: enriching ? "not-allowed" : "pointer",
+              cursor: loadingOdds ? "not-allowed" : "pointer",
               width: "100%"
             }}
           >
-            {enriching ? '⏳ Enriquecendo...' : '🔄 Enrich with API (Ver Logs [FALLBACK])'}
+            {loadingOdds ? '⏳ Buscando odds...' : '💰 Buscar Odds Reais (API-Football)'}
           </button>
+          
+          {/* Mostrar jogos não encontrados */}
+          {unmatchedGames.length > 0 && (
+            <div style={{
+              marginTop: "16px",
+              padding: "12px",
+              background: "#450a0a",
+              border: `1px solid ${C.red}`,
+              borderRadius: "6px",
+              color: C.red,
+              fontSize: "12px"
+            }}>
+              <div style={{ fontWeight: 600, marginBottom: "8px" }}>
+                ⚠️ {unmatchedGames.length} jogos não encontrados na API:
+              </div>
+              <div style={{ maxHeight: "100px", overflowY: "auto" }}>
+                {unmatchedGames.slice(0, 5).map((game, i) => (
+                  <div key={i} style={{ marginBottom: "2px" }}>
+                    {game.home || game.homeTeam || '?'} x {game.away || game.awayTeam || '?'}
+                  </div>
+                ))}
+                {unmatchedGames.length > 5 && (
+                  <div style={{ fontStyle: "italic", marginTop: "4px" }}>
+                    ... e mais {unmatchedGames.length - 5} jogos
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          
+          {/* Botão antigo mantido para compatibilidade */}
+          <div style={{ marginTop: "16px", paddingTop: "16px", borderTop: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: "12px", color: C.muted, marginBottom: "8px" }}>
+              ⚙️ Enriquecimento estatístico (legado):
+            </div>
+            <button
+              onClick={async () => {
+                if (!confirm("⚠️ Isso irá enriquecer todos os jogos FT com dados estatísticos da API. Continuar?")) return;
+                try {
+                  const apiKey = localStorage.getItem('football-api-key');
+                  if (!apiKey) {
+                    alert("❌ Configure API key primeiro!");
+                    return;
+                  }
+                  await enrichWithOdds(apiKey);
+                  alert(`✅ Enriquecimento estatístico concluído! Verifique o console para logs.`);
+                } catch (e: any) {
+                  alert("❌ Erro: " + (e?.message ?? String(e)));
+                }
+              }}
+              disabled={enriching}
+              style={{
+                background: enriching ? C.gray : C.gray,
+                color: "white",
+                border: "none",
+                borderRadius: "6px",
+                padding: "8px 16px",
+                fontSize: "12px",
+                fontWeight: 600,
+                cursor: enriching ? "not-allowed" : "pointer",
+                width: "100%"
+              }}
+            >
+              {enriching ? '⏳ Enriquecendo...' : '🔄 Enriquecer Estatísticas (Legado)'}
+            </button>
+          </div>
           
           {enrichErr && (
             <div style={{
