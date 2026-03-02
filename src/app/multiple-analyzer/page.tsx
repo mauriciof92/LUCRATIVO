@@ -124,12 +124,12 @@ export default function MultipleAnalyzerPage() {
       selectedGames.has(g.match || `${g.home} x ${g.away}`)
     );
 
-    const selectedMarketsData = Array.from(selectedMarkets).map(marketKey => {
+    const selectedMarketsData = Array.from(selectedMarkets).map((marketKey, index) => {
       const [gameMatch, marketType] = marketKey.split('|');
       const game = selectedGamesData.find((g: any) => 
         (g.match || `${g.home} x ${g.away}`) === gameMatch
       );
-      return { game, marketType };
+      return { game, marketType, key: marketKey, index };
     }).filter(m => m.game);
 
     try {
