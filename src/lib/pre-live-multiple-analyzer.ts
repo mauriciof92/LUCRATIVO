@@ -40,9 +40,9 @@ const TIER_CONFIG: Record<string, { nGames: number; minGames: number; marketsPer
   sinfonia:  { nGames: 2, minGames: 2, marketsPerGame: 6, stake: 20, minTotal: 1.5,  maxTotal: 20.0 }, // 🆕 Sinfonia: teto teórico=6; cap real é dinâmico por qualidade do jogo
   ftbox:     { nGames: 3, minGames: 2, marketsPerGame: 2, stake: 25, minTotal: 2.0,  maxTotal: 15.0 }, // 🆕 FT Box: foco em mercados FT de time
 };
-// Qualidade mínima por jogo (gate de entrada)
-const MIN_SCORE = 0.55;  // Score ≥ 55%
-const MIN_CONF  = 0.45;  // Confiança ≥ 45%
+// Qualidade mínima por jogo (gate de entrada) - REDUZIDO TEMPORARIAMENTE
+const MIN_SCORE = 0.45;  // Score ≥ 45% (era 55%)
+const MIN_CONF  = 0.35;  // Confiança ≥ 35% (era 45%)
 
 export interface LiveMultipleSuggestion {
   id: string;
@@ -102,7 +102,6 @@ export class PreLiveMultipleAnalyzer {
 
   // 🆕 Campeonatos que não devem ter finalizações FT sugeridas
   private excludedLeaguesForFT: string[] = [
-    "Eerste Divisie",
     "Ligue 2",
     // Adicionar outros campeonatos conforme necessidade
   ];
@@ -639,6 +638,7 @@ export class PreLiveMultipleAnalyzer {
       avgConfidence: number;
     };
     ftBoxCandidates?: any[];
+    games?: any[]; // 🆕 Adicionar jogos com patternLines
   }> {
     try {
       const { games } = parseCSV(csvText);
@@ -665,12 +665,16 @@ export class PreLiveMultipleAnalyzer {
         console.log(`🔄 ${ignoredMatches.length} jogos ignorados pelo usuário. ${availableGames.length} restantes.`);
       }
       
-      // 🚫 FILTRO DE QUALIDADE — Score ≥ 65% E Confiança ≥ 55%
+      // 🚫 FILTRO DE QUALIDADE — Score ≥ 45% E Confiança ≥ 35% (REDUZIDO TEMPORARIAMENTE)
       const qualityGames = availableGames.filter(g => {
         const scoreResult = computeScore(g);
         const score = typeof scoreResult === 'number' ? scoreResult : scoreResult?.score || 0;
         const confResult = computeConfidence(g);
         const conf = confResult?.score || 0;
+        
+        // 🆕 Log detalhado para debugging
+        console.log(`🔍 [QUALITY] ${g.match}: score=${(score*100).toFixed(1)}%, conf=${(conf*100).toFixed(1)}%`);
+        
         return score >= MIN_SCORE && conf >= MIN_CONF;
       });
       console.log(`⭐ ${qualityGames.length} jogos com qualidade (score≥${MIN_SCORE*100}%, conf≥${MIN_CONF*100}%)`);
@@ -705,7 +709,9 @@ export class PreLiveMultipleAnalyzer {
           avgConfidence: suggestions.reduce((acc, s) => acc + s.confidence, 0) / suggestions.length || 0
         },
         // 🆕 Adicionar ftBoxCandidates para o construtor manual
-        ftBoxCandidates: await this.getFTBoxCandidates(qualityGames)
+        ftBoxCandidates: await this.getFTBoxCandidates(qualityGames),
+        // 🆕 Adicionar jogos processados com patternLines
+        games: qualityGames
       };
     } catch (error) {
       console.error(' Erro na análise pré-live:', error);
@@ -717,7 +723,8 @@ export class PreLiveMultipleAnalyzer {
           confluencePairs: 0,
           avgConfidence: 0
         },
-        ftBoxCandidates: []
+        ftBoxCandidates: [],
+        games: [] // 🆕 Adicionar games vazios no erro
       };
     }
   }
@@ -753,6 +760,51 @@ export class PreLiveMultipleAnalyzer {
       const poison = detectPoisonTriggers(g);
       const poisonTag = poison.isPoison ? ` ${poison.primaryTrigger?.icon} ${poison.primaryTrigger?.tag}` : '';
       const matchName = g?.match || `${g?.home || ""} x ${g?.away || ""}`.trim();
+
+      // 🆕 Adicionar Cantos FT em patternLines para jogos com exC >= 10
+      console.log(`[CANTOS-DEBUG] ${g.home}: exC=${g.exC}, lambda=${(g.cantFTH ?? 0) + (g.cantFTA ?? 0)}`);
+      if ((g.exC ?? 0) >= 10) {
+        const lambdaCantos = (g.cantFTH ?? 0) + (g.cantFTA ?? 0);
+        
+        if (lambdaCantos >= 8) {
+          // Calcular linha Poisson para 70% de probabilidade
+          const linhasCantos = [7.5, 8.5, 9.5, 10.5, 11.5, 12.5];
+          let melhorLinha: number | null = null;
+          
+          for (const linha of linhasCantos) {
+            const prob = poissonProb(lambdaCantos, linha);
+            if (prob >= 0.68 && prob <= 0.85) {
+              melhorLinha = linha;
+              break;
+            }
+          }
+          
+          if (melhorLinha !== null) {
+            const prob = poissonProb(lambdaCantos, melhorLinha);
+            
+            // Verificar odds reais se disponíveis
+            const matchKey = `${g.home} x ${g.away}`;
+            const realMarkets = (this as any).realOddsMap?.[matchKey] ?? {};
+            const realOddKey = `Over ${melhorLinha} Cantos FT`;
+            const realOdd = realMarkets[realOddKey];
+            
+            // Só adicionar se odd real >= 1.35 ou se não há odds reais (fallback)
+            const hasRealOdds = Object.keys(realMarkets).length > 0;
+            const oddFinal = realOdd ?? (hasRealOdds ? null : 1.75);
+            
+            if (oddFinal !== null) {
+              if (!g.patternLines) g.patternLines = [];
+              g.patternLines.push({
+                label: `Over ${melhorLinha} Cantos FT`,
+                odd: oddFinal,
+                hitRate: prob,
+                source: 'cantos_exc',
+              });
+              console.log(`[CANTOS-EXC] ${g.home}: exC=${g.exC} lambda=${lambdaCantos.toFixed(1)} → Over ${melhorLinha} @ ${oddFinal} (prob=${Math.round(prob*100)}%)`);
+            }
+          }
+        }
+      }
 
       return markets.map((m: any) => ({
         match: matchName,
@@ -1575,6 +1627,7 @@ export async function analyzeLiveMultiplesAsync(csvText: string, oddsMap?: Recor
   suggestions: LiveMultipleSuggestion[];
   summary: any;
   ftBoxCandidates?: any[];
+  games?: any[]; // 🆕 Adicionar jogos com patternLines
 }> {
   const analyzer = new PreLiveMultipleAnalyzer();
   return analyzer.analyzeLiveMultiples(csvText, oddsMap, fixtureMap, ignoredMatches);

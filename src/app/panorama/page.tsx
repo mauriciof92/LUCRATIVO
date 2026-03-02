@@ -2,6 +2,7 @@
 import { useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useBacktest, STAKE_FIXA } from '../../hooks/useBacktest';
+import { analyzeLiveMultiplesAsync } from '../../lib/pre-live-multiple-analyzer';
 import { NavHeader } from '../../components/NavHeader';
 import { ProfileBadge, PoisonBadges, FavoritoBar, KPI as KpiCard, C, EmptyState } from '../../components/ui';
 
@@ -208,7 +209,62 @@ function GameCard({ game }: { game: any }) {
 
 export default function PanoramaPage() {
   const router = useRouter();
-  const { results, summary, loading, todayGames } = useBacktest();
+  const { results, summary, loading, todayGames, lastCsvText } = useBacktest();
+
+  // 🆕 Processar jogos NS com Cantos FT
+  const [nsGames, setNsGames] = useState<any[]>([]);
+  const [processingNs, setProcessingNs] = useState(false);
+
+  // Processar jogos NS quando lastCsvText estiver disponível
+  useMemo(async () => {
+    if (!lastCsvText || lastCsvText.trim() === '') return;
+    if (nsGames.length > 0) return; // Já processado
+
+    setProcessingNs(true);
+    try {
+      console.log('[PANORAMA] Processando jogos NS para Cantos FT...');
+      const analysis = await analyzeLiveMultiplesAsync(lastCsvText);
+      
+      // Extrair jogos NS com patternLines do analyzer
+      const enrichedGames = analysis.suggestions.flatMap(s => 
+        s.selections.map(sel => ({
+          id: `${sel.match}_${sel.market}`,
+          match: sel.match,
+          league: sel.league,
+          hour: sel.hour,
+          home: sel.match.split(' x ')[0]?.trim() || '',
+          away: sel.match.split(' x ')[1]?.trim() || '',
+          mainMarket: { label: sel.market, odd: sel.odd },
+          patternLines: [], // Será preenchido abaixo com dados reais
+          score: sel.confidence / 100,
+          confidence: sel.confidence,
+        }))
+      );
+
+      // 🆕 ADICIONAR patternLines REAIS do analyzer (não simulação)
+      const gamesWithCantos = enrichedGames.map((game: any) => {
+        // Encontrar o jogo original no analyzer para pegar patternLines reais
+        const originalGame = analysis.games?.find((g: any) => 
+          g.match === game.match || 
+          `${g.home} x ${g.away}` === game.match
+        );
+        
+        if (originalGame?.patternLines?.length) {
+          game.patternLines = originalGame.patternLines;
+          console.log(`[PANORAMA-CANTOS] ${game.home}: → ${originalGame.patternLines.length} patternLines reais`);
+        }
+        
+        return game;
+      });
+
+      setNsGames(gamesWithCantos);
+      console.log(`[PANORAMA] ${gamesWithCantos.length} jogos NS processados com Cantos FT`);
+    } catch (error) {
+      console.error('[PANORAMA] Erro ao processar jogos NS:', error);
+    } finally {
+      setProcessingNs(false);
+    }
+  }, [lastCsvText]);
 
   // Filtros locais — NÃO buscam dado, apenas filtram o que já está carregado
   const [filterTier, setFilterTier]     = useState('');
@@ -245,9 +301,30 @@ export default function PanoramaPage() {
 
   // Jogos filtrados e ordenados
   const games = useMemo(() => {
-    // Usar todayGames se disponível, senão fallback para results
-    const source = (todayGames && todayGames.length > 0) ? todayGames : results;
-    let list = [...source];
+    // Montar mapa base com todayGames/results
+    const baseMap = new Map<string, any>();
+    const baseList = todayGames.length > 0 ? todayGames : results;
+    baseList.forEach((g: any) => {
+      const key = g.match || `${g.home} x ${g.away}`;
+      baseMap.set(key, g);
+    });
+
+    // Enriquecer com patternLines do nsGames onde disponível
+    // NÃO substituir o jogo inteiro — só adicionar patternLines
+    if (nsGames?.length) {
+      nsGames.forEach((ng: any) => {
+        const key = ng.match || `${ng.home} x ${ng.away}`;
+        const base = baseMap.get(key);
+        if (base && ng.patternLines?.length) {
+          baseMap.set(key, { 
+            ...base, 
+            patternLines: ng.patternLines 
+          });
+        }
+      });
+    }
+
+    let list = Array.from(baseMap.values());
 
     // 🆕 FILTRAR JOGOS QUE JÁ COMEÇARAM
     const now = new Date();
@@ -286,24 +363,43 @@ export default function PanoramaPage() {
     if (filterLeague) list = list.filter((g: any) =>
       g.league === filterLeague
     );
-    if (filterMarket) list = list.filter((g: any) => {
+    if (filterMarket) {
       const mk = filterMarket.toLowerCase();
-      const mainLabel = (g.mainMarket?.label ?? '').toLowerCase();
-      const comboLabels = (g.combo ?? []).map((c: any) => (c.label ?? '').toLowerCase());
-      const patternLabels = (g.patternLines ?? []).map((p: any) => (p.label ?? '').toLowerCase());
-      const extraLabels = (g.extraMarkets ?? []).map((e: any) => (e.label ?? '').toLowerCase());
-      return mainLabel.includes(mk)
-        || comboLabels.some((l: string) => l.includes(mk))
-        || patternLabels.some((l: string) => l.includes(mk))
-        || extraLabels.some((l: string) => l.includes(mk));
-    });
+      
+      list = list.filter((g: any) => {
+        const mainLabel    = (g.mainMarket?.label ?? '').toLowerCase();
+        const comboLabels  = (g.combo ?? []).map((c: any) => (c.label ?? '').toLowerCase());
+        const patternLabels = (g.patternLines ?? []).map((p: any) => (p.label ?? '').toLowerCase());
+        const extraLabels  = (g.extraMarkets ?? []).map((e: any) => (e.label ?? '').toLowerCase());
+        
+        return mainLabel.includes(mk)
+          || comboLabels.some((l: string) => l.includes(mk))
+          || patternLabels.some((l: string) => l.includes(mk))
+          || extraLabels.some((l: string) => l.includes(mk));
+      });
+      
+      // Reordenar quando filtro ativo
+      list = list.sort((a: any, b: any) => {
+        const rank = (g: any): number => {
+          const mainLabel = (g.mainMarket?.label ?? '').toLowerCase();
+          if (mainLabel.includes(mk)) return 0;  // mercado principal = topo
+          const comboLabels = (g.combo ?? []).map((c: any) => (c.label ?? '').toLowerCase());
+          if (comboLabels.some((l: string) => l.includes(mk))) return 1; // combo = meio
+          return 2; // patternLines/extra = fim
+        };
+        const diff = rank(a) - rank(b);
+        if (diff !== 0) return diff;
+        // Desempate por score
+        return Number(b.score ?? 0) - Number(a.score ?? 0);
+      });
+    }
 
     return list.sort((a: any, b: any) =>
       sortBy === 'score'  ? Number(b.score ?? 0) - Number(a.score ?? 0) :
       sortBy === 'hora'   ? extractTime(a.hour) - extractTime(b.hour) :
       (a.league ?? '').localeCompare(b.league ?? '')
     );
-  }, [todayGames, results, filterTier, filterLeague, filterMarket, sortBy]);
+  }, [nsGames, todayGames, results, filterTier, filterLeague, filterMarket, sortBy]);
 
   return (
     <main style={{ minHeight:'100vh', background:'#0d1117',

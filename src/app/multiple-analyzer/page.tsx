@@ -406,7 +406,7 @@ export default function MultipleAnalyzerPage() {
             {suggestions.length > 0 && (
               <button
                 onClick={handleFetchOdds}
-                disabled={loadingOdds ? true : false}
+                disabled={!!loadingOdds}
                 style={{
                   background: loadingOdds ? C.muted : C.green,
                   color: 'white', border: 'none', borderRadius: 6, padding: '10px 20px',

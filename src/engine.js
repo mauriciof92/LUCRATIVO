@@ -60,9 +60,14 @@ function extractOdds(rowValues) {
   return odds;
 }
 
-// buildHeaderIndex removido — substituído por buildEngineIndex (csv-helper.ts)
-function _REMOVED(headers) {
+function buildEngineIndex(headers) {
   const find = (patterns, fallbackIdx) => {
+    for (const p of patterns) {
+      for (let i = 0; i < headers.length; i++) {
+        const h = headers[i];
+        if (p.test(h)) return i;
+      }
+    }
     return fallbackIdx;
   };
 
@@ -84,18 +89,18 @@ function _REMOVED(headers) {
       /\bexg\b.*\bexpectativa\b.*\bgols\b/,
       /\bexpectativa\b.*\bgols\b.*\bmedia\s*final\b/,
       /\bglobal\b.*\bexg\b/,
-    ], 25),  // ✅ CORRIGIDO: coluna 25 (exG)
+    ], 25),  // CORRIGIDO: coluna 25 (exG)
     exC:         find([
       /\bexc\b.*\bexpectativa\b.*\bescanteios\b/,
       /\bexpectativas?\b.*\bescanteios\b/,
       /\bglobal\b.*\bexc\b/,
-    ], 26),  // ✅ CORRIGIDO: coluna 26 (exC)
+    ], 26),  // CORRIGIDO: coluna 26 (exC)
 
     // CV gols (FT, excluir HT e cantos)
     cv:          find([
       /\bcoeficiente\b.*\bvariacao\b.*\bgols\b(?!.*(?:1.*tempo|ht|cant))/,
       /\bcv\b.*\bcoeficiente\b.*\bvariacao\b.*\bgols\b(?!.*(?:1.*tempo|ht|cant))/,
-    ], 25),
+    ], 23), // CORRIGIDO: índice 23 (era 25)
 
     // AF força de ataque
     af:          find([
@@ -114,90 +119,90 @@ function _REMOVED(headers) {
     pontosPorJogo: find([
       /\bpontos\b.*\bjogo\b/,
       /\bppg\b/,
-    ], 37),
+    ], 33), // CORRIGIDO: índice 33 (era 37)
 
     // Média gols marcados Casa-Fora (excluir HT e sofridos)
     golsAvgHA:   find([
       /\bmedia\b.*\bgols\b.*\bmarcados\b(?!.*(?:1.*tempo|ht|sofrido))/,
       /\bmedia\b.*\bgols\b.*\bmarcados\b.*\bcasa.?fora\b/,
-    ], 17),
+    ], 15), // CORRIGIDO: índice 15 (era 17)
 
     // Média escanteios marcados FT (excluir HT e minutos)
     cantFTFor:   find([
       /\bmedia\b.*\bescanteios\b.*\bmarcados\b(?!.*(?:1.*tempo|ht|\d+-\d+))/,
       /\bmedia\b.*\bescanteios\b.*\bmarcados\b.*\bcasa.?fora\b(?!.*ht)/,
-    ], 19),
+    ], 17), // CORRIGIDO: índice 17 (era 19)
 
     // Média escanteios marcados HT (1° tempo, excluir minutos)
     cantHTFor:   find([
       /\bmedia\b.*\bescanteios\b.*\bmarcados\b.*1.?\s*tempo(?!.*\d+-\d+)/,
       /\bht\b.*\bmedia\b.*\bescanteios\b.*\bmarcados\b/,
-    ], 31),
+    ], 19), // CORRIGIDO: índice 19 (era 31)
 
     // Chutes marcados (no gol) HT
     shotsOnHT:   find([
       /\btotal\b.*\bchutes\b.*\bmarcados\b.*(?:1.*tempo|ht)/,
       /\bchutes\b.*\bno\s*gol\b.*(?:1.*tempo|ht)/,
       /\bmedia\b.*\bchutes\b.*\bmarcados\b.*(?:1.*tempo|ht)/,
-    ], 34),
+    ], 31), // CORRIGIDO: índice 31 (era 34)
 
     // Total chutes HT (sem "marcados" nem "sofridos")
     shotsTotHT:  find([
       /\btotal\b.*\bchutes\b.*(?:1.*tempo|ht)(?!.*(?:marcad|sofrid))/,
       /\bmedia\b.*\btotal\b.*\bchutes\b.*(?:1.*tempo|ht)(?!.*(?:marcad|sofrid))/,
-    ], 46),
+    ], 42), // CORRIGIDO: índice 42 (era 46)
 
-    // Mais de 0.5 gols 1° tempo
+    // % Mais de 0.5 gols 1° tempo
     gol05HT:     find([
       /\bmais\b.*\b0[,.]?5\b.*\bgols\b.*(?:1.*tempo|ht)/,
       /\bover\s*0[.,]?5\b.*(?:1.*tempo|ht)/,
-    ], 38),
+    ], 34), // CORRIGIDO: índice 34 (era 38)
 
     // ── NOVOS CAMPOS ──
     // Média gols sofridos
     golsSofridos: find([
       /\bmedia\b.*\bgols\b.*\bsofridos\b(?!.*(?:1.*tempo|ht))/,
-    ], 33),
+    ], 30), // CORRIGIDO: índice 30 (era mapeado como escanteios31a40 - ERRADO)
 
     // DF força de defesa
     dfDefesa:    find([
       /\bforca\b.*\bdefesa\b/,
       /\bdf\b.*\bforca\b.*\bdefesa\b/,
-    ], 45), // CORRIGIDO: índice 45 (era 47)
+    ], 43), // CORRIGIDO: índice 43 (era 45)
     
     // Média chutes sofridos HT
     mediaChutesSofridosHT: find([
       /\bmedia\s*total\s*chutes\s*sofridos\s*1.*tempo\b/,
       /\bmédia\s*total\s*chutes\s*sofridos\s*1.*tempo\b/,
-    ], 45), // CORRIGIDO: índice 45 (era 45)
+    ], 41), // CORRIGIDO: índice 41 (era 45)
     
     // % AF Força de ataque
     afPercent:    find([
       /%\s*af\s*forca\s*de\s*ataque/,
       /%\s*forca\s*de\s*ataque/,
-    ], 47), // NOVO: índice 47 para % AF
+    ], 32), // CORRIGIDO: índice 32 (era 47)
 
     // Favoritismo
     favoritismo: find([
       /\bfavoritismo\b/,
       /\bfav\b.*\bmedia\b.*\bfinal\b/,
-    ], 48),
+    ], 44), // CORRIGIDO: índice 44 (era 48)
 
     // Gols marcados HT
     golsHTMarcados: find([
       /\bmedia\b.*\bgols\b.*\bmarcados\b.*(?:1.*tempo|ht)/,
-    ], 39),
+    ], 35), // CORRIGIDO: índice 35 (era 39)
 
     // Gols sofridos HT
     golsHTSofridos: find([
       /\bmedia\b.*\bgols\b.*\bsofridos\b.*(?:1.*tempo|ht)/,
-    ], 40),
+    ], 36), // CORRIGIDO: índice 36 (era 40)
 
     // % Ambas marcaram
     btsPercent: find([
       /\bambas\b.*\bmarcaram\b/,
       /\bbts\b/,
-    ], 41),
+    ], 37), // CORRIGIDO: índice 37 (era 41)
 
     // 📊 COLUNAS ADICIONAIS DO PACKBALL (33 colunas faltantes)
     
@@ -205,7 +210,7 @@ function _REMOVED(headers) {
     percMais25Gols: find([
       /%\s*mais\s*de\s*2\.5\s*gols/,
       /\bpercent\s*mais\s*2\.5\s*gols\b/,
-    ], 18),
+    ], 16), // CORRIGIDO: índice 16 (era 18)
     
     percMediaGolsMarcadosHT: find([
       /%\s*media\s*gols\s*marcados\s*1.*tempo/,
@@ -216,52 +221,54 @@ function _REMOVED(headers) {
     mediaEscanteiosMarcados: find([
       /\bmedia\b.*\bescanteios\b.*\bmarcados\b/,
       /\bmédia\b.*\bescanteios\b.*\bmarcados\b/,
-    ], 19),
+    ], 17), // CORRIGIDO: índice 17 (era 19)
     
     mediaEscanteiosSofridos: find([
       /\bmedia\b.*\bescanteios\b.*\bsofridos\b/,
       /\bmédia\b.*\bescanteios\b.*\bsofridos\b/,
-    ], 20),
+    ], 18), // CORRIGIDO: índice 18 (era 20)
     
     mediaEscanteiosSofridosHT: find([
       /\bmedia\b.*\bescanteios\b.*\bsofridos\b.*\b1.*tempo\b/,
       /\bmédia\b.*\bescanteios\b.*\bsofridos\b.*\b1.*tempo\b/,
-    ], 22),
+    ], 20), // CORRIGIDO: índice 20 (era 22)
     
     percMais4EscanteiosHT: find([
       /%\s*mais\s*de\s*4\s*escanteios\s*1.*tempo/,
       /\bpercent\s*mais\s*4\s*escanteios\s*1.*tempo\b/,
-    ], 23),
+    ], 21), // CORRIGIDO: índice 21 (era 23)
     
     percMais5EscanteiosHT: find([
       /%\s*mais\s*de\s*5\s*escanteios\s*1.*tempo/,
       /\bpercent\s*mais\s*5\s*escanteios\s*1.*tempo\b/,
-    ], 24),
+    ], 22), // CORRIGIDO: índice 22 (era 24)
     
     mediaEscanteios0a10: find([
       /\bmedia\s*escanteios\s*marcados\s*0-10\b/,
       /\bmédia\s*escanteios\s*marcados\s*0-10\b/,
-    ], 43),
+    ], 39), // CORRIGIDO: índice 39 (era 43)
     
     mediaEscanteios11a20: find([
       /\bmedia\s*escanteios\s*marcados\s*11-20\b/,
       /\bmédia\s*escanteios\s*marcados\s*11-20\b/,
-    ], 44),
+    ], 40), // CORRIGIDO: índice 40 (era 44)
     
     mediaEscanteios21a30: find([
       /\bmedia\s*escanteios\s*marcados\s*21-30\b/,
       /\bmédia\s*escanteios\s*marcados\s*21-30\b/,
-    ], 31), // CORRIGIDO: índice 31 (era 44)
+    ], 29), // CORRIGIDO: índice 29 (era 31)
     
+    // Média escanteios marcados 31-40'
     mediaEscanteios31a40: find([
       /\bmedia\s*escanteios\s*marcados\s*31-40\b/,
       /\bmédia\s*escanteios\s*marcados\s*31-40\b/,
-    ], 32),
+    ], 30), // CORRIGIDO: índice 30 (era 32) - CONFLITO RESOLVIDO
     
+    // % Primeiro a cobrar 5 escanteios
     percPrimeiro5Escanteios: find([
       /%\s*primeiro\s*a\s*cobrar\s*5\s*escanteios/,
       /\bpercent\s*primeiro\s*5\s*escanteios\b/,
-    ], 42),
+    ], 38), // CORRIGIDO: índice 38 (era 42)
     
     // Estatísticas de Chutes Detalhadas
     // (mediaChutesSofridosHT já mapeado acima)
@@ -270,23 +277,38 @@ function _REMOVED(headers) {
     mediaTotalChutesHT: find([
       /\bmedia\s*total\s*chutes\s*1.*tempo\b/,
       /\bmédia\s*total\s*chutes\s*1.*tempo\b/,
-    ], 46), // NOVO: índice 46 para total chutes HT
+    ], 42), // CORRIGIDO: índice 42 (era 46)
     
     // Estatísticas de Variação
     cvGolsHT: find([
       /\bcoeficiente\b.*\bvariacao\b.*\bgols\b.*\b1.*tempo\b/,
       /\bcv\b.*\bcoeficiente\b.*\bvariacao\b.*\bgols\b.*\b1.*tempo\b/,
-    ], 26),
+    ], 24), // CORRIGIDO: índice 24 (era 26)
     
     cvCantosHT: find([
       /\bcoeficiente\b.*\bvariacao\b.*\bcantos\b.*\b1.*tempo\b/,
       /\bcv\b.*\bcoeficiente\b.*\bvariacao\b.*\bcantos\b.*\b1.*tempo\b/,
-    ], 29),
+    ], 27), // CORRIGIDO: índice 27 (era 29)
     
-    cvCantos: find([
-      /\bcoeficiente\b.*\bvariacao\b.*\bcantos\b(?!.*1.*tempo)/,
-      /\bcv\b.*\bcoeficiente\b.*\bvariacao\b.*\bcantos\b(?!.*1.*tempo)/,
-    ], 30),
+    // 🆕 CAMPOS ADICIONAIS CRÍTICOS
+    cantos_37_ht: find([
+      /\bmédia\s*escanteios\s*marcados\s*37-ht/i,
+      /\bcantos\s*37\s*ht/i,
+    ], 45), // NOVO: índice 45 para cantos 37-HT
+    
+    as_precisao: find([
+      /%\s*precisão\s*nos\s*chutes/i,
+      /%\s*precisao\s*nos\s*chutes/i,
+      /as\s*%\s*precisão/i,
+      /as\s*%\s*precisao/i,
+    ], 46), // NOVO: índice 46 para AS % Precisão
+    
+    appg: find([
+      /avg\s*-\s*média\s*de\s*ataques\s*perigosos/i,
+      /média\s*de\s*ataques\s*perigosos/i,
+      /avg\s*ataques\s*perigosos/i,
+      /appg/i,
+    ], 47), // NOVO: índice 47 para AVG ataques perigosos
   };
 }
 
@@ -506,9 +528,9 @@ export function parseCSV(text) {
     // Campos adicionais
     const classPipe  = toPipe(v[idx.classificacao]);
     const pontosPipe = toPipe(v[idx.pontosPorJogo]);
-    const cantos37HT = toPipe(v[idx.cantos_37_ht]);
-    const asPrecisao = toPipe(v[idx.as_precisao]);
-    const appgPipe   = toPipe(v[idx.appg]);
+    const cantos37HT = toPipe(v[idx.cantos_37_ht]); // 🆕 Campo novo: cantos 37-HT
+    const asPrecisao = toPipe(v[idx.as_precisao]); // 🆕 Campo novo: AS % Precisão (corrigido)
+    const appgPipe   = toPipe(v[idx.appg]); // 🆕 Campo novo: AVG ataques perigosos
 
     const odds = extractOdds(v);
 
@@ -570,12 +592,12 @@ export function parseCSV(text) {
       classA:    classPipe.a ?? 0,
       ppgH:        pontosPipe.h ?? 0,
       ppgA:        pontosPipe.a ?? 0,
-      cantos37HTH:  cantos37HT.h ?? 0,
-      cantos37HTA:  cantos37HT.a ?? 0,
-      asPrecisaoH:  asPrecisao.h ?? 0,
-      asPrecisaoA:  asPrecisao.a ?? 0,
-      appgH:        appgPipe.h   ?? 0,
-      appgA:        appgPipe.a   ?? 0,
+      cantos37HTH:  cantos37HT.h ?? 0,  // 🆕 Novo campo: cantos 37-HT
+      cantos37HTA:  cantos37HT.a ?? 0,  // 🆕 Novo campo: cantos 37-HT
+      asPrecisaoH:  asPrecisao.h ?? 0,   // 🆕 Novo campo: AS % Precisão
+      asPrecisaoA:  asPrecisao.a ?? 0,   // 🆕 Novo campo: AS % Precisão
+      appgH:        appgPipe.h   ?? 0,   // 🆕 Novo campo: AVG ataques perigosos
+      appgA:        appgPipe.a   ?? 0,   // 🆕 Novo campo: AVG ataques perigosos
       // Adicionar objeto AF para getFavorito
       af:          { h: afH, a: afA },
       odds,
@@ -612,13 +634,14 @@ export function parseCSV(text) {
    FAVORITO
 ───────────────────────────────────────── */
 export function getFavorito(g) {
-  const af = g?.af;
-  if (!af || typeof af !== "object") {
-    console.log(`❌ AF inválido: type=${typeof af}, value=${JSON.stringify(af)}`);
+  // 🆕 Usar % AF (coluna 32) em vez de AF bruto (coluna 35)
+  const afHome = g?.asPrecisaoH || 0;  // % AF correto
+  const afAway = g?.asPrecisaoA || 0;  // % AF correto
+
+  if (!afHome || !afAway) {
+    console.log(`❌ AF inválido: home=${afHome}, away=${afAway}`);
     return { lado: "", nome: "", nomeUnder: "", afDiff: 0, afFav: 0, afUnder: 0, chFavGol: 0, chFavTot: 0, chUnderGol: 0, chUnderTot: 0, cantFavHT: 0, cantUnderHT: 0, cantFavFT: 0, gol05HTFav: 0 };
   }
-
-  const { h: afHome, a: afAway } = af;
 
   const isCasa = afHome >= afAway;
   return {
@@ -658,7 +681,7 @@ export function computeScore(g) {
     // 2. Diferença de força (peso: 19%) - poderio ofensivo [CALIBRAGEM v1.2]
     afDiff: {
       weight: 0.19,
-      value: Math.min(Math.abs((g?.afH || 0) - (g?.afA || 0)) / 35, 1), // Range 0-35 (mais flexível)
+      value: Math.min(Math.abs((g?.asPrecisaoH || 0) - (g?.asPrecisaoA || 0)) / 35, 1), // Range 0-35 (mais flexível) - CORRIGIDO: usar % AF
       description: "Diferença de força"
     },
     
