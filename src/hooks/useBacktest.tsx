@@ -18,6 +18,9 @@ function getImportDateISO(hour: string): string {
   // DD/MM/YYYY
   const ddmmyyyy = h.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
   if (ddmmyyyy) return `${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}`;
+  // DD-MM-YYYY (com ou sem hora)
+  const ddmmyyyyDash = h.match(/^(\d{2})-(\d{2})-(\d{4})/);
+  if (ddmmyyyyDash) return `${ddmmyyyyDash[3]}-${ddmmyyyyDash[2]}-${ddmmyyyyDash[1]}`;
   // DD/MM (sem ano → usar ano atual)
   const ddmm = h.match(/^(\d{2})\/(\d{2})/);
   if (ddmm) return `${new Date().getFullYear()}-${ddmm[2]}-${ddmm[1]}`;
