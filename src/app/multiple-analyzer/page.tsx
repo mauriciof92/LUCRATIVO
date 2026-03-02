@@ -391,7 +391,6 @@ export default function MultipleAnalyzerPage() {
 
             <button
               onClick={() => setShowFTBoxBuilder(!showFTBoxBuilder)}
-              disabled={false}
               style={{
                 background: showFTBoxBuilder ? C.gold : C.surface,
                 color: showFTBoxBuilder ? 'white' : C.text,
@@ -541,7 +540,6 @@ export default function MultipleAnalyzerPage() {
                     setSelectedMarkets(new Set());
                     setCustomFTBox(null);
                   }}
-                  disabled={false}
                   style={{
                     background: 'transparent', border: `1px solid ${C.muted}`,
                     borderRadius: 6, padding: '8px 16px', fontSize: 12,
@@ -656,7 +654,6 @@ export default function MultipleAnalyzerPage() {
                   {ignoredMatches.length > 0 && (
                     <button
                       onClick={handleClearIgnored}
-                      disabled={false}
                       style={{
                         background: 'transparent', border: `1px solid ${C.muted}`,
                         borderRadius: 6, padding: '4px 10px', fontSize: 11,
@@ -724,7 +721,6 @@ export default function MultipleAnalyzerPage() {
                                     <button
                                       onClick={handleIgnoreMatchClick(match)}
                                       title={`Trocar ${match} por outro jogo`}
-                                      disabled={false}
                                       style={{
                                         background: 'transparent', border: `1px solid ${C.muted}40`,
                                         borderRadius: 6, padding: '3px 8px', fontSize: 12,
