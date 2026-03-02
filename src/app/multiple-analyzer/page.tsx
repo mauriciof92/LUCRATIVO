@@ -379,7 +379,7 @@ export default function MultipleAnalyzerPage() {
           <div style={{ display: 'flex', gap: 12, marginTop: 20, flexWrap: 'wrap' }}>
             <button
               onClick={handleAnalyze}
-              disabled={analyzing || !csvText ? true : false}
+              disabled={!!analyzing || !csvText}
               style={{
                 background: analyzing ? C.muted : C.blue,
                 color: 'white', border: 'none', borderRadius: 6, padding: '10px 20px',
@@ -493,7 +493,7 @@ export default function MultipleAnalyzerPage() {
                               <input
                                 type="checkbox"
                                 checked={isMarketSelected}
-                                disabled={axisConflict && !isMarketSelected ? true : false}
+                                disabled={axisConflict && !isMarketSelected}
                                 onChange={(e) => {
                                   const newMarkets = new Set(selectedMarkets);
                                   if (e.target.checked) {
@@ -552,7 +552,7 @@ export default function MultipleAnalyzerPage() {
                 </button>
                 <button
                   onClick={handleGenerateCustomFTBox}
-                  disabled={selectedGames.size < 2 || selectedMarkets.size < 2 ? true : false}
+                  disabled={selectedGames.size < 2 || selectedMarkets.size < 2}
                   style={{
                     background: selectedGames.size >= 2 && selectedMarkets.size >= 2 ? C.gold : C.muted,
                     color: 'white', border: 'none', borderRadius: 6, padding: '8px 16px',
