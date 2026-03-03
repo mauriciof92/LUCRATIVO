@@ -794,13 +794,20 @@ export class PreLiveMultipleAnalyzer {
             
             if (oddFinal !== null) {
               if (!g.patternLines) g.patternLines = [];
-              g.patternLines.push({
-                label: `Over ${melhorLinha} Cantos FT`,
-                odd: oddFinal,
-                hitRate: prob,
-                source: 'cantos_exc',
-              });
-              console.log(`[CANTOS-EXC] ${g.home}: exC=${g.exC} lambda=${lambdaCantos.toFixed(1)} → Over ${melhorLinha} @ ${oddFinal} (prob=${Math.round(prob*100)}%)`);
+              
+              // 🆕 Verificar duplicação antes de adicionar
+              const existingLine = g.patternLines.find((p: any) => p.label === `Over ${melhorLinha} Cantos FT`);
+              if (!existingLine) {
+                g.patternLines.push({
+                  label: `Over ${melhorLinha} Cantos FT`,
+                  odd: oddFinal,
+                  hitRate: prob,
+                  source: 'cantos_exc',
+                });
+                console.log(`[CANTOS-EXC] ${g.home}: exC=${g.exC} lambda=${lambdaCantos.toFixed(1)} → Over ${melhorLinha} @ ${oddFinal} (prob=${Math.round(prob*100)}%)`);
+              } else {
+                console.log(`[CANTOS-EXC] ${g.home}: linha ${melhorLinha} já existe, ignorando duplicação`);
+              }
             }
           }
         }
