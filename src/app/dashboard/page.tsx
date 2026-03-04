@@ -23,8 +23,13 @@ export default function Dashboard() {
     });
   }, [results, period]);
 
+  // PROPOSTO — "avg" e "no-odd" viram uma categoria explícita "não resolvido"
   const confirmed = useMemo(() =>
     filtered.filter(r => r.mainMarket.result === "win" || r.mainMarket.result === "lose"),
+    [filtered]
+  );
+  const unresolved = useMemo(() =>
+    filtered.filter(r => r.mainMarket.result === "avg" || r.mainMarket.result === "no-odd"),
     [filtered]
   );
 
@@ -94,7 +99,7 @@ export default function Dashboard() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 32 }}>
           <div>
             <h1 style={{ fontSize: 28, fontWeight: 700, margin: 0 }}>📊 Dashboard Analítico</h1>
-            <p style={{ color: C.muted, marginTop: 6, fontSize: 14 }}>{confirmed.length} apostas confirmadas no período</p>
+            <p style={{ color: C.muted, marginTop: 6, fontSize: 14 }}>{confirmed.length} apostas confirmadas de {filtered.length} totais</p>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             {([7, 30, 90] as Period[]).map(d => (
@@ -116,8 +121,13 @@ export default function Dashboard() {
           <KpiCard label="Hit Rate" value={`${hitRate.toFixed(1)}%`}
             sub={`${wins}W / ${losses}L de ${confirmed.length} apostas`}
             color={hitRate >= 60 ? C.green : hitRate >= 45 ? C.gold : C.red} />
+          {unresolved.length > 0 && (
+            <KpiCard label="Não Resolvidos" value={String(unresolved.length)} 
+              sub={`${unresolved.filter(r => r.mainMarket.result === 'avg').length} avg + ${unresolved.filter(r => r.mainMarket.result === 'no-odd').length} no-odd`}
+              color={C.gold} />
+          )}
           <KpiCard label="Stake Fixo" value={`R$ ${STAKE_FIXA.toFixed(2)}`} sub="Por aposta" color={C.blue} />
-          <KpiCard label="Jogos no Período" value={String(filtered.length)} sub={`${confirmed.length} com resultado`} />
+          <KpiCard label="Jogos no Período" value={String(filtered.length)} sub={`${confirmed.length} + ${unresolved.length} = ${filtered.length}`} />
         </div>
 
         {roiChart.length > 1 && (

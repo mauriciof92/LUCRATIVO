@@ -95,7 +95,20 @@ async function apiFetch(path: string, apiKey: string, attempt = 0): Promise<any>
     headers: { "x-apisports-key": apiKey },
     cache: "no-store",
   });
+
+  // ← ADICIONAR: retry em 503 (rate limit HTTP)
+  if (res.status === 503 || res.status === 429) {
+    if (attempt < 3) {
+      const wait = (attempt + 1) * 10000 // 10s, 20s, 30s
+      console.warn(`API-Football ${res.status} on ${path}, retrying in ${wait/1000}s (attempt ${attempt + 1})`)
+      await sleep(wait)
+      return apiFetch(path, apiKey, attempt + 1)
+    }
+    throw new Error(`API-Football ${res.status} após 3 tentativas: ${path}`)
+  }
+
   if (!res.ok) throw new Error(`API-Football ${res.status}: ${path}`);
+  
   const data = await res.json();
 
   // 🆕 LOGS DE DIAGNÓSTICO - Rate Limits

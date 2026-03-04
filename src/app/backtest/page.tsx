@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, Fragment } from 'react';
 import { useBacktest, STAKE_FIXA } from '../../hooks/useBacktest';
 import { NavHeader } from '../../components/NavHeader';
 import { Badge, KPI, TH, TD, C, ProfileBadge, PoisonBadges, FavoritoBar, SectionBox, EmptyState, mktCat } from '../../components/ui';
@@ -125,9 +125,8 @@ export default function BacktestPage() {
                     const isExpanded = expandedId === r.id;
                     const hourClean = (r.hour || '').replace(/^\d{2}\/\d{2}\s*/, '') || '—';
                     return (
-                      <>
+                      <Fragment key={r.id}>
                         <tr
-                          key={r.id}
                           onClick={() => setExpandedId(isExpanded ? null : r.id)}
                           style={{
                             borderBottom: `1px solid ${C.border}20`,
@@ -157,7 +156,7 @@ export default function BacktestPage() {
                         </tr>
                         {/* Row expandida */}
                         {isExpanded && (
-                          <tr key={`${r.id}-exp`}>
+                          <tr>
                             <td colSpan={9} style={{ padding: '12px 16px', background: `${C.bg}` }}>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                                 <PoisonBadges poison={r.poison} />
@@ -187,7 +186,7 @@ export default function BacktestPage() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </Fragment>
                     );
                   })}
                 </tbody>

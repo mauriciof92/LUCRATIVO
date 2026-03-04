@@ -629,7 +629,7 @@ export class PreLiveMultipleAnalyzer {
   }
 
   // Analisa CSV do dia para gerar múltiplas pré-live
-  async analyzeLiveMultiples(csvText: string, oddsMap?: Record<number, PreMatchOdds>, fixtureMap?: Record<string, number>, ignoredMatches: string[] = []): Promise<{
+  async analyzeLiveMultiples(csvText: string, oddsMap?: Record<number, PreMatchOdds>, fixtureMap?: Record<string, number>, ignoredMatches: string[] = [], selectedDate?: string): Promise<{
     suggestions: LiveMultipleSuggestion[];
     summary: {
       totalGames: number;
@@ -644,18 +644,18 @@ export class PreLiveMultipleAnalyzer {
       const { games } = parseCSV(csvText);
       console.log(`📊 ${games.length} jogos encontrados no CSV`);
       
-      // Filtra jogos que ainda não começaram E são de hoje
-      const todayDDMM = (() => {
-        const now = new Date();
-        return String(now.getDate()).padStart(2, '0') + String(now.getMonth() + 1).padStart(2, '0');
-      })();
+      // Filtra jogos que ainda não começaram E são da data selecionada
+      const now = new Date();
+      const todayDDMM = String(now.getDate()).padStart(2, '0') + String(now.getMonth() + 1).padStart(2, '0');
+      const targetDDMM = selectedDate ?? todayDDMM;  // usa a data selecionada ou hoje
+      
       const upcomingGames = games.filter(g => {
         if (g.status && g.status !== 'NS') return false;
-        // Verificar se o jogo é de hoje (evitar jogos NS de dias anteriores no CSV acumulado)
+        // Verificar se o jogo é da data selecionada (evitar jogos NS de dias anteriores no CSV acumulado)
         const gameDateDDMM = extractDateFromHour(g.hour);
-        return gameDateDDMM === todayDDMM;
+        return gameDateDDMM === targetDDMM;
       });
-      console.log(`🎯 ${upcomingGames.length} jogos NS de hoje disponíveis para análise pré-live`);
+      console.log(`🎯 ${upcomingGames.length} jogos NS de ${selectedDate ? `data ${selectedDate}` : 'hoje'} disponíveis para análise pré-live`);
 
       // 🔄 Filtrar jogos ignorados pelo usuário (blacklist temporária — efeito roleta, só na sessão)
       const availableGames = ignoredMatches.length > 0
@@ -1630,12 +1630,12 @@ export async function analyzePreLiveMultiples(csvText: string): Promise<{
 }
 
 // 🆕 Export async version for real odds integration
-export async function analyzeLiveMultiplesAsync(csvText: string, oddsMap?: Record<number, PreMatchOdds>, fixtureMap?: Record<string, number>, ignoredMatches: string[] = []): Promise<{
+export async function analyzeLiveMultiplesAsync(csvText: string, oddsMap?: Record<number, PreMatchOdds>, fixtureMap?: Record<string, number>, ignoredMatches: string[] = [], selectedDate?: string): Promise<{
   suggestions: LiveMultipleSuggestion[];
   summary: any;
   ftBoxCandidates?: any[];
   games?: any[]; // 🆕 Adicionar jogos com patternLines
 }> {
   const analyzer = new PreLiveMultipleAnalyzer();
-  return analyzer.analyzeLiveMultiples(csvText, oddsMap, fixtureMap, ignoredMatches);
+  return analyzer.analyzeLiveMultiples(csvText, oddsMap, fixtureMap, ignoredMatches, selectedDate);
 }

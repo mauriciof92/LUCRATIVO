@@ -4,6 +4,7 @@ import { loadStoredBacktest, saveStoredBacktest, type StoredBacktest } from "../
 import { fetchRealStatsForMatches, fetchFixtureStatistics } from "../lib/footballApi";
 import { parseCSV, extractDateFromHour } from "../engine";
 import { supabase, supabaseConfigured } from "../lib/supabase";
+import { generateDeterministicId } from "../lib/utils";
 import { Badge, KPI, TH, TD, mktCat, C } from "../components/ui";
 
 // 🆕 CONSTANTE GLOBAL - STAKE FIXA R$ 25,00
@@ -181,7 +182,9 @@ export const useBacktest = () => {
           });
 
           return {
-            id: row.id, match: row.match, league: row.league ?? '', hour: row.hour ?? '',
+            // ID determinístico para consistência local (não usado no upsert)
+            id: generateDeterministicId(row.match, row.hour),
+            match: row.match, league: row.league ?? '', hour: row.hour ?? '',
             status: row.status ?? '', resultHome: rHome, resultAway: rAway,
             profile: row.profile ?? '', score: Number(row.score ?? 0), confidence: Number(row.confidence ?? 0),
             created_at: row.created_at ?? '', favorito, poison,
@@ -213,8 +216,10 @@ export const useBacktest = () => {
   useEffect(() => {
     if (results.length === 0) return;
 
+    // PROPOSTO — "avg" e "no-odd" viram uma categoria explícita "não resolvido"
     // Filtrar apenas mainMarket com resultado definitivo (win/lose)
     const confirmed = results.filter(r => r.mainMarket.result === "win" || r.mainMarket.result === "lose");
+    const unresolved = results.filter(r => r.mainMarket.result === "avg" || r.mainMarket.result === "no-odd");
     const wins = confirmed.filter(r => r.mainMarket.result === "win").length;
     const losses = confirmed.length - wins;
     const totalProfit = confirmed.reduce((acc, r) => acc + Number(r.mainMarket.profit || 0), 0);
@@ -224,6 +229,7 @@ export const useBacktest = () => {
     const newSummary = {
       totalGames: results.length,
       totalBets: confirmed.length,
+      unresolvedBets: unresolved.length,
       wins,
       losses,
       totalProfit,
@@ -237,7 +243,7 @@ export const useBacktest = () => {
     const stored = loadStoredBacktest();
     saveStoredBacktest({ version: "1.0.0", createdAt: new Date().toISOString(), ...(stored ?? {}), results, summary: newSummary });
 
-    console.log(`[ROI-RECALC] Unificado: ${confirmed.length} confirmadas, ROI=${roi.toFixed(2)}%, HitRate=${hitRate.toFixed(2)}%, Profit=R$${totalProfit.toFixed(2)}`);
+    console.log(`[ROI-RECALC] Unificado: ${confirmed.length} confirmadas, ${unresolved.length} não resolvidas, ROI=${roi.toFixed(2)}%, HitRate=${hitRate.toFixed(2)}%, Profit=R$${totalProfit.toFixed(2)}`);
   }, [results]);
 
   // Persistir inputs manuais no localStorage
@@ -302,8 +308,9 @@ export const useBacktest = () => {
             throw pingErr;
           }
 
-          const upsertRows = mergedResults.map(r => ({
-            id: r.id,
+          // Função para mapear resultado para formato do Supabase
+          const toSupabaseRow = (r: BetResult) => ({
+            // Sem ID - vai ser gerado pelo Supabase ou usar match+hour como chave
             match: r.match,
             league: r.league,
             hour: r.hour,
@@ -317,22 +324,43 @@ export const useBacktest = () => {
             main_market_odd: r.mainMarket.odd,
             main_market_result: r.mainMarket.result,
             main_market_profit: r.mainMarket.profit,
-            favorito_data: JSON.stringify(r.favorito ?? {}),
-            combo_data: JSON.stringify(r.combo ?? []),
-            poison_data: JSON.stringify(r.poison ?? {}),
-          }));
+            favorito_data: JSON.stringify(r.favorito),
+            combo_data: JSON.stringify(r.combo),
+            poison_data: JSON.stringify(r.poison),
+          });
+
+          const upsertRows = mergedResults.map(toSupabaseRow);
+
+          // Antes do chunking em lotes de 50
+          // Deduplicar por match+hour: FT > NS > outros, mais recente por último
+          const deduped = Object.values(
+            upsertRows.reduce((acc, row) => {
+              const key = `${row.match}__${row.hour}` 
+              const existing = acc[key]
+              if (!existing) return { ...acc, [key]: row }
+              
+              // Prioridade: FT > qualquer outro status
+              const existingIsFT = existing.status === 'FT'
+              const rowIsFT = row.status === 'FT'
+              
+              if (!existingIsFT && rowIsFT) return { ...acc, [key]: row } // novo é FT, substituir
+              return acc // manter existente
+            }, {} as Record<string, typeof upsertRows[0]>)
+          );
+
+          console.log(`[SAVE] Deduplicação: ${upsertRows.length} → ${deduped.length} registros`);
 
           // Salvar em lotes de 50 para evitar timeout
           const BATCH = 50;
           let totalSaved = 0;
           
-          for (let i = 0; i < upsertRows.length; i += BATCH) {
-            const batch = upsertRows.slice(i, i + BATCH);
+          for (let i = 0; i < deduped.length; i += BATCH) {
+            const batch = deduped.slice(i, i + BATCH);
             const { data, error: upsertErr } = await supabase
               .from('bet_results')
               .upsert(batch, { 
-                onConflict: 'id',
-                ignoreDuplicates: false 
+                onConflict: 'match,hour',  // Usar match+hour como chave de conflito
+                ignoreDuplicates: false      // atualiza se já existe
               })
               .select('id');
               
@@ -346,10 +374,10 @@ export const useBacktest = () => {
             }
           }
           
-          if (totalSaved === upsertRows.length) {
-            console.log(`[SAVE] ✅ Total salvo: ${totalSaved}/${upsertRows.length}`);
+          if (totalSaved === deduped.length) {
+            console.log(`[SAVE] ✅ Total salvo: ${totalSaved}/${deduped.length}`);
           } else {
-            setSaveError(`Salvo parcialmente: ${totalSaved}/${upsertRows.length}. Verifique conexão.`);
+            setSaveError(`Salvo parcialmente: ${totalSaved}/${deduped.length}. Verifique conexão.`);
           }
           
         } catch (e: any) {

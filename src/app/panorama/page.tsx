@@ -1,10 +1,14 @@
 'use client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useBacktest, STAKE_FIXA } from '../../hooks/useBacktest';
 import { analyzeLiveMultiplesAsync } from '../../lib/pre-live-multiple-analyzer';
 import { NavHeader } from '../../components/NavHeader';
 import { ProfileBadge, PoisonBadges, FavoritoBar, KPI as KpiCard, C, EmptyState } from '../../components/ui';
+
+// Estado da data selecionada (default = hoje)
+const today = new Date();
+const todayStr = today.toISOString().split('T')[0];  // YYYY-MM-DD para o input
 
 function GameCard({ game }: { game: any }) {
   const score = Math.round(Number(game.score ?? 0) * 100);
@@ -211,60 +215,42 @@ export default function PanoramaPage() {
   const router = useRouter();
   const { results, summary, loading, todayGames, lastCsvText } = useBacktest();
 
+  // Estado da data selecionada (default = hoje)
+  const [selectedDate, setSelectedDate] = useState(todayStr);
+  
+  // Converter YYYY-MM-DD → DDMM para o analyzer
+  const selectedDDMM = selectedDate.slice(8,10) + selectedDate.slice(5,7);
+
   // 🆕 Processar jogos NS com Cantos FT
   const [nsGames, setNsGames] = useState<any[]>([]);
   const [processingNs, setProcessingNs] = useState(false);
 
+  // Limpar jogos NS quando a data mudar
+  useEffect(() => {
+    setNsGames([]);
+    setProcessingNs(false);
+  }, [selectedDate]);
+
   // Processar jogos NS quando lastCsvText estiver disponível
-  useMemo(async () => {
+  useEffect(() => {
     if (!lastCsvText || lastCsvText.trim() === '') return;
-    if (nsGames.length > 0) return; // Já processado
+    // Removido: if (nsGames.length > 0) return; // Permitir reprocessamento quando data mudar
 
     setProcessingNs(true);
-    try {
-      console.log('[PANORAMA] Processando jogos NS para Cantos FT...');
-      const analysis = await analyzeLiveMultiplesAsync(lastCsvText);
-      
-      // Extrair jogos NS com patternLines do analyzer
-      const enrichedGames = analysis.suggestions.flatMap(s => 
-        s.selections.map(sel => ({
-          id: `${sel.match}_${sel.market}`,
-          match: sel.match,
-          league: sel.league,
-          hour: sel.hour,
-          home: sel.match.split(' x ')[0]?.trim() || '',
-          away: sel.match.split(' x ')[1]?.trim() || '',
-          mainMarket: { label: sel.market, odd: sel.odd },
-          patternLines: [], // Será preenchido abaixo com dados reais
-          score: sel.confidence / 100,
-          confidence: sel.confidence,
-        }))
-      );
-
-      // 🆕 ADICIONAR patternLines REAIS do analyzer (não simulação)
-      const gamesWithCantos = enrichedGames.map((game: any) => {
-        // Encontrar o jogo original no analyzer para pegar patternLines reais
-        const originalGame = analysis.games?.find((g: any) => 
-          g.match === game.match || 
-          `${g.home} x ${g.away}` === game.match
-        );
+    (async () => {
+      try {
+        console.log('[PANORAMA] Processando jogos NS para Cantos FT...');
+        const analysis = await analyzeLiveMultiplesAsync(lastCsvText, undefined, undefined, [], selectedDDMM);
         
-        if (originalGame?.patternLines?.length) {
-          game.patternLines = originalGame.patternLines;
-          console.log(`[PANORAMA-CANTOS] ${game.home}: → ${originalGame.patternLines.length} patternLines reais`);
-        }
-        
-        return game;
-      });
-
-      setNsGames(gamesWithCantos);
-      console.log(`[PANORAMA] ${gamesWithCantos.length} jogos NS processados com Cantos FT`);
-    } catch (error) {
-      console.error('[PANORAMA] Erro ao processar jogos NS:', error);
-    } finally {
-      setProcessingNs(false);
-    }
-  }, [lastCsvText]);
+        setNsGames(analysis.games ?? []); // ← guardar jogos completos do analyzer
+        console.log(`[PANORAMA] ${analysis.games?.length || 0} jogos NS processados com Cantos FT`);
+      } catch (error) {
+        console.error('[PANORAMA] Erro ao processar jogos NS:', error);
+      } finally {
+        setProcessingNs(false);
+      }
+    })();
+  }, [lastCsvText, selectedDDMM]);
 
   // Filtros locais — NÃO buscam dado, apenas filtram o que já está carregado
   const [filterTier, setFilterTier]     = useState('');
@@ -275,16 +261,20 @@ export default function PanoramaPage() {
   const today = new Date().toISOString().split('T')[0];
 
   // KPIs
-  const todayBets = results.filter(r => {
+  const selectedDayBets = results.filter(r => {
     const d = (r.hour ?? '').split(' ')[0];
-    return d === today &&
+    return d === selectedDate &&
       (r.mainMarket.result === 'win' || r.mainMarket.result === 'lose');
   });
-  const lucroHoje = todayBets.reduce(
+  const lucroDia = selectedDayBets.reduce(
     (acc, r) => acc + Number(r.mainMarket.profit ?? 0), 0
   );
+  // PROPOSTO — "avg" e "no-odd" viram uma categoria explícita "não resolvido"
   const confirmed = results.filter(r =>
     r.mainMarket.result === 'win' || r.mainMarket.result === 'lose'
+  );
+  const unresolved = results.filter(r =>
+    r.mainMarket.result === 'avg' || r.mainMarket.result === 'no-odd'
   );
   const totalProfit = confirmed.reduce(
     (acc, r) => acc + Number(r.mainMarket.profit ?? 0), 0
@@ -294,65 +284,81 @@ export default function PanoramaPage() {
     : 0;
 
   // Ligas e mercados únicos para os selects de filtro
-  const availableLeagues = useMemo(() =>
-    Array.from(new Set((todayGames ?? results).map((g: any) =>
-      g.league).filter(Boolean))).sort()
-  , [todayGames, results]);
+  const availableLeagues = useMemo(() => {
+    const source = nsGames?.length > 0 ? nsGames : (todayGames ?? results);
+    return Array.from(new Set(source.map((g: any) =>
+      g.league).filter(Boolean))).sort();
+  }, [nsGames, todayGames, results]);
 
   // Jogos filtrados e ordenados
   const games = useMemo(() => {
-    // Montar mapa base com todayGames/results
-    const baseMap = new Map<string, any>();
-    const baseList = todayGames.length > 0 ? todayGames : results;
-    baseList.forEach((g: any) => {
-      const key = g.match || `${g.home} x ${g.away}`;
-      baseMap.set(key, g);
-    });
+    let list: any[];
 
-    // Enriquecer com patternLines do nsGames onde disponível
-    // NÃO substituir o jogo inteiro — só adicionar patternLines
-    if (nsGames?.length) {
+    if (selectedDate !== todayStr && nsGames.length > 0) {
+      // CASO 1: Data futura → analyzer é a fonte (CSV filtrado por selectedDDMM)
+      list = [...nsGames];
+
+    } else if (selectedDate === todayStr) {
+      // CASO 2: Hoje → fonte é DB (todayGames), enriquecida com patternLines
+      const baseMap = new Map<string, any>();
+      const dbList = todayGames.length > 0 ? todayGames : results;
+      dbList.forEach((g: any) => {
+        const key = g.match || `${g.home} x ${g.away}`;
+        baseMap.set(key, g);
+      });
       nsGames.forEach((ng: any) => {
         const key = ng.match || `${ng.home} x ${ng.away}`;
         const base = baseMap.get(key);
         if (base && ng.patternLines?.length) {
-          baseMap.set(key, { 
-            ...base, 
-            patternLines: ng.patternLines 
-          });
+          baseMap.set(key, { ...base, patternLines: ng.patternLines });
         }
+      });
+      list = Array.from(baseMap.values());
+
+    } else {
+      // CASO 3: Data passada → filtrar results pelo dia selecionado
+      // selectedDate está em YYYY-MM-DD, g.hour pode ser "DD-MM-YYYY HH:MM"
+      list = results.filter((g: any) => {
+        const raw = g.hour ?? '';
+        // Tenta extrair DD-MM-YYYY do campo hour
+        const m = raw.match(/^(\d{2})-(\d{2})-(\d{4})/);
+        if (m) {
+          const gameDate = `${m[3]}-${m[2]}-${m[1]}`; // converte para YYYY-MM-DD
+          return gameDate === selectedDate;
+        }
+        return false;
       });
     }
 
-    let list = Array.from(baseMap.values());
-
-    // 🆕 FILTRAR JOGOS QUE JÁ COMEÇARAM
-    const now = new Date();
-    const currentTime = now.getHours() * 60 + now.getMinutes();
-    
-    // Extrair HH:MM de strings como "22/02 15:00" ou "2026-02-22 15:00" ou "15:00"
-    const extractTime = (h: string) => {
-      const m = (h ?? '').match(/(\d{1,2}):(\d{2})/);
-      return m ? parseInt(m[1]) * 60 + parseInt(m[2]) : 9999;
-    };
-    
-    const isGameStarted = (game: any) => {
-      const raw = game.hour ?? '';
-      // Tentar parse de "DD-MM-YYYY HH:MM"
-      const match = raw.match(/^(\d{2})-(\d{2})-(\d{4})\s+(\d{2}):(\d{2})/);
-      if (!match) return false;
+    // 🆕 FILTRAR JOGOS QUE JÁ COMEÇARAM (apenas para hoje)
+    if (selectedDate === todayStr) {
+      const now = new Date();
+      const currentTime = now.getHours() * 60 + now.getMinutes();
       
-      const [, day, month, year, hh, mm] = match;
-      const gameDateTime = new Date(
-        Number(year), Number(month) - 1, Number(day),
-        Number(hh), Number(mm)
-      );
+      // Extrair HH:MM de strings como "22/02 15:00" ou "2026-02-22 15:00" ou "15:00"
+      const extractTime = (h: string) => {
+        const m = (h ?? '').match(/(\d{1,2}):(\d{2})/);
+        return m ? parseInt(m[1]) * 60 + parseInt(m[2]) : 9999;
+      };
       
-      // Só considerar iniciado se a data+hora do jogo já passou
-      return gameDateTime <= new Date();
-    };
-    
-    list = list.filter((g: any) => !isGameStarted(g));
+      const isGameStarted = (game: any) => {
+        const raw = game.hour ?? '';
+        // Tentar parse de "DD-MM-YYYY HH:MM"
+        const match = raw.match(/^(\d{2})-(\d{2})-(\d{4})\s+(\d{2}):(\d{2})/);
+        if (!match) return false;
+        
+        const [, day, month, year, hh, mm] = match;
+        const gameDateTime = new Date(
+          Number(year), Number(month) - 1, Number(day),
+          Number(hh), Number(mm)
+        );
+        
+        // Só considerar iniciado se a data+hora do jogo já passou
+        return gameDateTime <= new Date();
+      };
+      
+      list = list.filter((g: any) => !isGameStarted(g));
+    }
 
     if (filterTier) list = list.filter((g: any) => {
       const s = Math.round(Number(g.score ?? 0) * 100);
@@ -394,12 +400,20 @@ export default function PanoramaPage() {
       });
     }
 
+    // Funções auxiliares (fora do if para uso no sort)
+    const extractTime = (h: string) => {
+      const m = (h ?? '').match(/(\d{1,2}):(\d{2})/);
+      return m ? parseInt(m[1]) * 60 + parseInt(m[2]) : 9999;
+    };
+
     return list.sort((a: any, b: any) =>
       sortBy === 'score'  ? Number(b.score ?? 0) - Number(a.score ?? 0) :
       sortBy === 'hora'   ? extractTime(a.hour) - extractTime(b.hour) :
       (a.league ?? '').localeCompare(b.league ?? '')
     );
-  }, [nsGames, todayGames, results, filterTier, filterLeague, filterMarket, sortBy]);
+  }, [nsGames, todayGames, results, selectedDate, filterTier, filterLeague, filterMarket, sortBy]);
+
+  const isToday = selectedDate === todayStr;
 
   return (
     <main style={{ minHeight:'100vh', background:'#0d1117',
@@ -414,16 +428,45 @@ export default function PanoramaPage() {
 
       <div style={{ padding:'28px 40px' }}>
 
-        {/* TÍTULO */}
+        {/* TÍTULO E SELETOR DE DATA */}
         <div style={{ marginBottom:24 }}>
-          <h1 style={{ fontSize:24, fontWeight:700, margin:'0 0 4px' }}>
-            🏆 Panorama do Dia
-          </h1>
-          <p style={{ color:'#8b949e', margin:0, fontSize:14 }}>
-            {new Date().toLocaleDateString('pt-BR', {
-              weekday:'long', day:'numeric', month:'long'
-            })}
-          </p>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div>
+              <h1 style={{ fontSize:24, fontWeight:700, margin:'0 0 4px' }}>
+                🏆 Panorama do Dia
+              </h1>
+              <p style={{ color:'#8b949e', margin:0, fontSize:14 }}>
+                {new Date(selectedDate + 'T12:00:00').toLocaleDateString('pt-BR', {
+                  weekday:'long', day:'numeric', month:'long'
+                })}
+              </p>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ color: C.muted, fontSize: 13 }}>Data:</span>
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={e => setSelectedDate(e.target.value)}
+                style={{
+                  background: C.card,
+                  color: C.text,
+                  border: `1px solid ${C.border}`,
+                  borderRadius: 6,
+                  padding: '4px 8px',
+                  fontSize: 13,
+                  cursor: 'pointer'
+                }}
+              />
+              {selectedDate !== todayStr && (
+                <button
+                  onClick={() => setSelectedDate(todayStr)}
+                  style={{ fontSize: 11, color: C.muted, background: 'transparent', border: 'none', cursor: 'pointer' }}
+                >
+                  Voltar para hoje
+                </button>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* KPI CARDS */}
@@ -431,17 +474,23 @@ export default function PanoramaPage() {
           marginBottom:28 }}>
           {[
             {
-              label: 'Lucro Hoje',
-              value: `${lucroHoje >= 0 ? '+' : ''}R$ ${lucroHoje.toFixed(2)}`,
-              sub: `${todayBets.length} apostas hoje`,
-              color: lucroHoje >= 0 ? '#3fb950' : '#f85149',
+              label: isToday ? 'Lucro Hoje' : `Lucro Dia ${new Date(selectedDate + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}`,
+              value: `${lucroDia >= 0 ? '+' : ''}R$ ${lucroDia.toFixed(2)}`,
+              sub: `${selectedDayBets.length} apostas ${isToday ? 'hoje' : 'no dia'}`,
+              color: lucroDia >= 0 ? '#3fb950' : '#f85149',
             },
             {
               label: 'ROI Acumulado',
               value: `${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%`,
-              sub: `${confirmed.length} apostas confirmadas`,
+              sub: `${confirmed.length} confirmadas`,
               color: roi >= 0 ? '#3fb950' : '#f85149',
             },
+            ...(unresolved.length > 0 ? [{
+              label: 'Não Resolvidos',
+              value: String(unresolved.length),
+              sub: `${unresolved.filter(r => r.mainMarket.result === 'avg').length} avg + ${unresolved.filter(r => r.mainMarket.result === 'no-odd').length} no-odd`,
+              color: '#f0c040',
+            }] : []),
             {
               label: 'Jogos no Banco',
               value: String(results.length),

@@ -1,5 +1,6 @@
 // Test script para verificar save do Supabase após adicionar colunas
-import { supabase } from './supabase';
+import { supabase, supabaseConfigured } from './supabase';
+import { generateDeterministicId } from './utils';
 
 export async function testSupabaseSave() {
   console.log('[TEST] Iniciando teste de save no Supabase...');
@@ -18,32 +19,51 @@ export async function testSupabaseSave() {
     
     console.log('[TEST] Conexão OK');
     
-    // Teste de upsert com dados mock
-    const testData = [{
-      id: 'test-' + Date.now(),
-      match: 'Test Match x Test',
+    // Função para gerar ID determinístico
+    const toSupabaseRow = (r: any) => ({
+      // Sem ID - vai ser gerado pelo Supabase ou usar match+hour como chave
+      match: r.match,
+      league: r.league,
+      hour: r.hour,
+      status: r.status,
+      result_home: r.result_home,
+      result_away: r.result_away,
+      profile: r.profile,
+      score: r.score,
+      confidence: r.confidence,
+      main_market_label: r.main_market_label,
+      main_market_odd: r.main_market_odd,
+      main_market_result: r.main_market_result,
+      main_market_profit: r.main_market_profit,
+      favorito_data: JSON.stringify(r.favorito_data),
+      combo_data: JSON.stringify(r.combo_data),
+      poison_data: JSON.stringify(r.poison_data),
+    });
+
+    const testData = [toSupabaseRow({
+      match: 'Test Team A vs Test Team B',
       league: 'Test League',
-      hour: new Date().toISOString(),
+      hour: '03/03/2026 20:00',
       status: 'FT',
-      result_home: 1,
-      result_away: 0,
+      result_home: 2,
+      result_away: 1,
       profile: 'test',
-      score: 85,
-      confidence: 0.9,
-      main_market_label: 'Test Market',
-      main_market_odd: 2.0,
+      score: 75,
+      confidence: 85,
+      main_market_label: 'Over 2.5',
+      main_market_odd: 1.85,
       main_market_result: 'win',
-      main_market_profit: 1.0,
-      favorito_data: JSON.stringify({ test: true }),
-      combo_data: JSON.stringify([{ test: true }]),
-      poison_data: JSON.stringify({ test: true }),
-    }];
+      main_market_profit: 21.25,
+      favorito_data: { test: true },
+      combo_data: [{ test: true }],
+      poison_data: { test: true },
+    })];
     
     const { data, error: upsertErr } = await supabase
       .from('bet_results')
       .upsert(testData, { 
-        onConflict: 'id',
-        ignoreDuplicates: false 
+        onConflict: 'match,hour',  // Usar match+hour como chave de conflito
+        ignoreDuplicates: false      // atualiza se já existe
       })
       .select('id');
       
@@ -54,11 +74,12 @@ export async function testSupabaseSave() {
     
     console.log('[TEST] ✅ Upsert OK:', data?.length, 'registros');
     
-    // Limpar dados de teste
+    // Limpar dados de teste (usar match+hour para identificar)
     await supabase
       .from('bet_results')
       .delete()
-      .eq('id', testData[0].id);
+      .eq('match', 'Test Team A vs Test Team B')
+      .eq('hour', '03/03/2026 20:00');
       
     console.log('[TEST] 🧹 Dados de teste removidos');
     return true;
