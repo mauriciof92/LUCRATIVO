@@ -9,9 +9,11 @@ import {
 import { parseCSV, getOddForLabel, classifyProfile, getFavorito, computeConfidence, computeScore, calculateValueBet, getMinOddForLabel, suggestMainMarket, suggestCombo, detectPoisonTriggers, suggestBetBuilder, extractDateFromHour } from "../engine";
 
 // ── FUNÇÕES POISSON ─────────────────────────────────────────────────────────────
+// Memoizar factorial para não recalcular
+const factCache: Record<number, number> = { 0: 1, 1: 1 };
 function factorial(n: number): number {
-  if (n <= 1) return 1;
-  return n * factorial(n - 1);
+  if (factCache[n]) return factCache[n];
+  return (factCache[n] = n * factorial(n - 1));
 }
 
 function poissonProb(lambda: number, k: number): number {
@@ -522,7 +524,7 @@ export class PreLiveMultipleAnalyzer {
         
         ftMarkets.push({
           label: `${fav.nome} — Over ${finalLinha} Chutes FT`,
-          axis: 'chutes_ft',
+          axis: 'chutesft',
           odd: finalChuteOdd,
           prob: bestThreshold.prob,
           gold: bestThreshold.prob >= 0.80,
@@ -533,9 +535,9 @@ export class PreLiveMultipleAnalyzer {
     }
     
     // CANTOS FT — linha dinâmica
-    if (fav.cantFavHT >= 3.0) {
-      const lambda = fav.cantFavHT * 1.6;
-      const linhasCantos = [3.5, 4.5, 5.5, 6.5];
+    if (fav.cantFavFT >= 3.5) {
+      const lambda = fav.cantFavFT;
+      const linhasCantos = [3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5];
       
       let bestThreshold = null;
       for (const linha of [...linhasCantos].reverse()) {
@@ -554,7 +556,7 @@ export class PreLiveMultipleAnalyzer {
         
         ftMarkets.push({
           label: `${fav.nome} — Over ${finalLinha} Cantos FT`,
-          axis: 'cantos_ft',
+          axis: 'cantosft',
           odd: finalCantoOdd,
           prob: bestThreshold.prob,
           gold: bestThreshold.prob >= 0.80,
@@ -1209,8 +1211,8 @@ export class PreLiveMultipleAnalyzer {
             const finalOdd = chuteOddResult?.odd ?? 1.70;
             
             gameMarkets.push({
-              label: `${fav.nome} — Over ${thresholdChutes} Chutes FT`,
-              axis: 'chutes_ft',
+              label: `${fav.nome} - Mais de ${thresholdChutes} Chutes`,
+              axis: 'chutesft',
               odd: finalOdd,
               prob: probChutes,
               gold: probChutes >= 0.80,
@@ -1222,9 +1224,9 @@ export class PreLiveMultipleAnalyzer {
       }
       
       // CANTOS FT
-      if (fav.cantFavHT >= 3.0) {
-        const lambdaCantos = fav.cantFavHT * 1.6;
-        let thresholdCantos = this.calcDynamicThreshold(lambdaCantos, [3.5, 4.5, 5.5, 6.5], 0.70, 0.82);
+      if (fav.cantFavFT >= 3.5) {
+        const lambdaCantos = fav.cantFavFT;
+        let thresholdCantos = this.calcDynamicThreshold(lambdaCantos, [3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5], 0.70, 0.82);
         
         if (thresholdCantos) {
           const probCantos = poissonProb(lambdaCantos, thresholdCantos);
@@ -1241,8 +1243,8 @@ export class PreLiveMultipleAnalyzer {
           const finalOdd = cantoOddResult?.odd ?? 1.85;
           
           gameMarkets.push({
-            label: `${fav.nome} — Over ${thresholdCantos} Cantos FT`,
-            axis: 'cantos_ft',
+            label: `${fav.nome} - Mais de ${thresholdCantos} Escanteios`,
+            axis: 'cantosft',
             odd: finalOdd,
             prob: probCantos,
             gold: probCantos >= 0.80,
@@ -1252,7 +1254,21 @@ export class PreLiveMultipleAnalyzer {
         }
       }
       
-      if (gameMarkets.length >= 1) {
+      // Só incluir se tiver AMBOS mercados (chutes + cantos)
+      const hasChutes = gameMarkets.some(m => m.axis === 'chutesft');
+      const hasCantos = gameMarkets.some(m => m.axis === 'cantosft');
+      
+      if (!hasChutes || !hasCantos) {
+        console.log(`FTBOX: ${game.home} descartado — precisa de ambos (chutes+cantos)`);
+        continue;
+      }
+      
+      // Ordenar: cantos primeiro, depois chutes
+      gameMarkets.sort((a, b) => 
+        a.axis === 'cantosft' ? -1 : b.axis === 'cantosft' ? 1 : 0
+      );
+      
+      if (gameMarkets.length >= 2) {
         const scoreResult = computeScore(game);
         const score = typeof scoreResult === 'number' ? scoreResult : scoreResult?.score || 0;
         
@@ -1308,7 +1324,7 @@ export class PreLiveMultipleAnalyzer {
 
           // Log sempre
           const hasRealOdds = !!this.realOddsMap?.[matchKey];
-          console.log(`[FTBOX-REAL] ${favName}: odds reais=${hasRealOdds} | chutes Over ${bestThreshold.linha} @ ${chuteOddResult?.odd ?? '1.70(fixo)'}`);
+          console.log(`[FTBOX-REAL] ${favName}: odds reais=${hasRealOdds} | chutes Mais de ${bestThreshold.linha} @ ${chuteOddResult?.odd ?? '1.70(fixo)'}`);
 
           // 🆕 Lógica corrigida para chutes sem cobertura na API
           // Verificar se API tem chaves de chutes
@@ -1326,7 +1342,7 @@ export class PreLiveMultipleAnalyzer {
 
           if (incluirChutes) {
             gameMarkets.push({
-              label: `${favName} — Over ${finalLinha} Chutes FT`,
+              label: `${favName} - Mais de ${finalLinha} Chutes`,
               odd: finalChuteOdd,
               prob: bestThreshold.prob,
               gold: bestThreshold.prob >= 0.80,
@@ -1337,9 +1353,9 @@ export class PreLiveMultipleAnalyzer {
       }
 
       // CANTOS FT — linha dinâmica com odds reais
-      if (fav.cantFavHT >= 3.0) {
-        const lambdaCantos = fav.cantFavHT * 1.6;
-        const linhasCantos = [3.5, 4.5, 5.5, 6.5];
+      if (fav.cantFavFT >= 3.5) {
+        const lambdaCantos = fav.cantFavFT;
+        const linhasCantos = [3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5];
         
         let bestThreshold = null;
         for (const linha of [...linhasCantos].reverse()) {
@@ -1355,7 +1371,7 @@ export class PreLiveMultipleAnalyzer {
           const cantoOddResult = this.resolveRealOdd(matchKey, favName, 'cantos', bestThreshold.linha, game);
 
           const hasRealOdds = !!this.realOddsMap?.[matchKey];
-          console.log(`[FTBOX-REAL] ${favName}: odds reais=${hasRealOdds} | cantos Over ${bestThreshold.linha} @ ${cantoOddResult?.odd ?? '1.85(fixo)'}`);
+          console.log(`[FTBOX-REAL] ${favName}: odds reais=${hasRealOdds} | cantos Mais de ${bestThreshold.linha} @ ${cantoOddResult?.odd ?? '1.85(fixo)'}`);
 
           const finalCantoOdd = cantoOddResult?.odd ?? 1.85;
           const finalLinha = cantoOddResult?.linha ?? bestThreshold.linha;
@@ -1363,7 +1379,7 @@ export class PreLiveMultipleAnalyzer {
 
           if (incluirCantos) {
             gameMarkets.push({
-              label: `${favName} — Over ${finalLinha} Cantos FT`,
+              label: `${favName} - Mais de ${finalLinha} Escanteios`,
               odd: finalCantoOdd,
               prob: bestThreshold.prob,
               gold: bestThreshold.prob >= 0.80,
@@ -1373,8 +1389,22 @@ export class PreLiveMultipleAnalyzer {
         }
       }
 
-      // Jogo entra no box se tem ao menos 1 mercado FT aprovado
-      if (gameMarkets.length >= 1) {
+      // Só incluir se tiver AMBOS mercados (chutes + cantos)
+      const hasChutes = gameMarkets.some(m => m.axis === 'chutesft');
+      const hasCantos = gameMarkets.some(m => m.axis === 'cantosft');
+      
+      if (!hasChutes || !hasCantos) {
+        console.log(`FTBOX: ${game.home} descartado — precisa de ambos (chutes+cantos)`);
+        continue;
+      }
+      
+      // Ordenar: cantos primeiro, depois chutes
+      gameMarkets.sort((a, b) => 
+        a.axis === 'cantosft' ? -1 : b.axis === 'cantosft' ? 1 : 0
+      );
+
+      // Jogo entra no box se tem AMBOS mercados FT aprovados
+      if (gameMarkets.length >= 2) {
         ftBoxCandidates.push({
           game,
           markets: gameMarkets,
@@ -1540,8 +1570,8 @@ export class PreLiveMultipleAnalyzer {
           odd = 1.70;
         }
       } else if (marketType === 'cantos_ft') {
-        const lambda = fav.cantFavHT * 1.6;
-        const linhasCantos = [3.5, 4.5, 5.5, 6.5];
+        const lambda = fav.cantFavFT;
+        const linhasCantos = [3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5];
         
         let bestThreshold = null;
         for (const linha of [...linhasCantos].reverse()) {
