@@ -30,49 +30,104 @@ function GameCard({ game }: { game: any }) {
   const primaryTrigger = isPoisonActive ? poison.primaryTrigger : null;
   const poisonGlow = primaryTrigger?.color ?? null;
 
-  // ── CONSTRUIR LISTA COMPLETA DE LINHAS ────────────────────
-  // Sem limite fixo — todas as linhas disponíveis, ordenadas por qualidade
-  const allLines = [
-    // 1. Linha principal do engine (destaque visual)
-    game.mainMarket?.label && {
-      label:     game.mainMarket.label,
-      odd:       Number(game.mainMarket.odd ?? 0),
-      source:    'engine' as const,
-      isPrimary: true,
-      hitRate:   null,
-    },
-    // 2. Linhas do combo geradas pelo engine
-    ...(game.combo ?? []).map((c: any) => ({
-      label:     c.label,
-      odd:       Number(c.odd ?? 0),
-      source:    'engine' as const,
-      isPrimary: false,
-      hitRate:   null,
-    })),
-    // 3. Linhas adicionais apontadas pela base histórica de padrões
-    // (populadas pelo pre-live-multiple-analyzer se disponível)
-    ...(game.patternLines ?? []).map((p: any) => ({
-      label:     p.label,
-      odd:       Number(p.odd ?? 0),
-      source:    'historico' as const,
-      isPrimary: false,
-      hitRate:   p.hitRate ?? null,
-    })),
-  ]
-  .filter(Boolean)
-  // Filtrar por qualidade: sem odd ou odd operável (não rejeitar sem odd)
-  .filter((l): l is NonNullable<typeof l> =>
-    !!l && !!l.label && (l.odd === 0 || (l.odd >= 1.10 && l.odd <= 6.00))
-  )
-  // Ordenar: primária primeiro, depois por valor da odd (maior = mais valor)
-  .sort((a, b) => {
-    if (a.isPrimary) return -1;
-    if (b.isPrimary) return 1;
-    // Histórico com hit rate alto sobe
-    if (a.source === 'historico' && (a.hitRate ?? 0) > 0.65) return -1;
-    if (b.source === 'historico' && (b.hitRate ?? 0) > 0.65) return 1;
-    return (b.odd ?? 0) - (a.odd ?? 0);
-  });
+  // ── CALCULAR EV POR LINHA ─────────────────────────────
+  // Para mainMarket: usar confidence do jogo como proxy de hit rate
+  // Para combo com hitRate explícito (ex: 88%): usar direto
+  // Para combo sem hitRate: usar confidence * 0.85 (desconto de incerteza)
+  const gameConf = game.confidence
+    ? Number(game.confidence) > 1
+      ? Number(game.confidence) / 100  // vem como 82 → divide
+      : Number(game.confidence)        // vem como 0.82 → usa direto
+    : Number(game.score ?? 0)          // score já é 0-1, não divide
+
+  const calcEV = (odd: number, prob: number | null) => {
+    if (!prob || !odd || odd < 1.10) return null
+    return (prob * odd) - 1
+  }
+
+  const getValueTag = (ev: number | null) => {
+    if (ev === null) return { label: 'Sem dado', color: '#555' }
+    if (ev >= 0.20) return { label: '🔥 Alto EV', color: '#3fb950' }
+    if (ev >= 0.08) return { label: '✅ Tem valor', color: '#58a6ff' }
+    if (ev >= 0.00) return { label: '⚠️ Marginal', color: '#f0c040' }
+    return { label: '❌ Sem valor', color: '#f85149' }
+  }
+
+  const isCorrelated = (line1: any, line2: any) => {
+    // Simplificado: considerar correlacionado se compartilham palavras-chave
+    const getKeywords = (label: string) => 
+      label.toLowerCase().split(/\s+/).filter(w => w.length > 3)
+    
+    const keywords1 = getKeywords(line1.label)
+    const keywords2 = getKeywords(line2.label)
+    
+    return keywords1.some(k => keywords2.includes(k)) || 
+           keywords2.some(k => keywords1.includes(k))
+  }
+
+  // ── SEPARAR LINHAS POR CAMADA ─────────────────────────
+  const mainLine = game.mainMarket?.label ? {
+    label: game.mainMarket.label,
+    odd: Number(game.mainMarket.odd ?? 0),
+    prob: gameConf,           // validado pelo engine completo
+    source: 'Principal',
+    sourceColor: '#f0c040',
+    isPrimary: true,
+  } : null
+
+  // ── 1. DEDUPLICAR combo (remove linhas iguais ao mainMarket) ──────
+  const dedupedComboLines = (game.combo ?? [])
+    .filter((c: any) => c.label !== game.mainMarket?.label)
+    .map((c: any) => {
+      const hitMatch = c.label?.match(/\((\d+)%\)/)
+      const hitRate = hitMatch ? Number(hitMatch[1]) / 100 : gameConf * 0.85
+      return {
+        label: c.label,
+        odd: Number(c.odd ?? 0),
+        prob: hitRate,
+        source: hitMatch ? `${hitMatch[1]}% histórico` : 'Engine',
+        sourceColor: hitMatch ? '#3fb950' : '#8b949e',
+        isPrimary: false,
+      }
+    })
+
+  const patternLines = (game.patternLines ?? []).map((p: any) => ({
+    label: p.label,
+    odd: Number(p.odd ?? 0),
+    prob: p.hitRate ?? null,
+    source: p.hitRate ? `${Math.round(p.hitRate*100)}% Poisson` : 'Poisson',
+    sourceColor: '#58a6ff',
+    isPrimary: false,
+  }))
+
+  // ── 2. RANKING — main + combo deduplicado ────────────────────────
+  const allRanked = [...(mainLine ? [mainLine] : []), ...dedupedComboLines]
+    .filter(l => l.odd >= 1.20 && l.prob !== null)
+    .map(l => ({ ...l, ev: calcEV(l.odd, l.prob) }))
+    .sort((a, b) => (b.ev ?? -1) - (a.ev ?? -1))
+
+  const bestBet = allRanked[0] ?? null
+  
+  // ── 3. LÓGICA DA DUPLA ────────────────────────────────────────────
+  let bestDouble: any = null
+
+  if (isPoisonActive && mainLine) {
+    // Poison ativo → dupla SEMPRE inclui mainLine (linha do engine)
+    // Parceiro = maior EV que NÃO seja o mainLine
+    const partner = allRanked.find(l => l.label !== mainLine.label) ?? null
+    if (partner) {
+      // Se bestBet já é o mainLine, parceiro é a 2ª linha
+      // Se bestBet é outra linha, força mainLine como 2ª perna
+      bestDouble = bestBet?.label === mainLine.label ? partner : mainLine
+    }
+  } else {
+    // Sem Poison → top 2 por EV, não correlacionados
+    const second = allRanked[1]
+    bestDouble = second && !isCorrelated(allRanked[0], second) ? second : null
+  }
+      
+  const doubleOdd = bestBet && bestDouble
+    ? (bestBet.odd * bestDouble.odd).toFixed(2) : null
 
   return (
     <div style={{
@@ -84,7 +139,7 @@ function GameCard({ game }: { game: any }) {
       marginBottom: 12,
     }}>
 
-      {/* HEADER: hora · liga · tier · profile */}
+      {/* HEADER — igual ao atual */}
       <div style={{ display:'flex', justifyContent:'space-between',
         alignItems:'center', marginBottom:10, flexWrap:'wrap', gap:6 }}>
         <span style={{ color:'#8b949e', fontSize:13 }}>
@@ -122,85 +177,123 @@ function GameCard({ game }: { game: any }) {
         </span>
       </div>
 
-      {/* TODAS AS LINHAS — sem limite, ordenadas por qualidade */}
-      <div style={{ display:'flex', flexDirection:'column', gap:6,
-        marginBottom:12 }}>
-        {allLines.map((line, i) => {
-          const hasOdd    = line.odd > 0;
-          const isOpera   = !hasOdd || (line.odd >= 1.20 && line.odd <= 4.00);
-          const srcIcon   = line.isPrimary ? '🎯' :
-                            line.source === 'historico' ? '📊' : '🔗';
-          const lineColor = line.isPrimary ? '#3fb950' :
-                            line.source === 'historico' ? '#58a6ff' : '#8b949e';
-
-          // Poison glow na linha principal
-          const showPoisonGlow = line.isPrimary && isPoisonActive && poisonGlow;
-
-          return (
-            <div key={i} style={{
-              background: line.isPrimary
-                ? (showPoisonGlow ? `${poisonGlow}12` : '#0d2818')
-                : '#1c2128',
-              border: `1px solid ${
-                showPoisonGlow ? poisonGlow :
-                line.isPrimary ? '#3fb950' :
-                line.source === 'historico' ? '#1f3a5f' : '#30363d'
-              }`,
-              borderRadius: 8,
-              padding: line.isPrimary ? '10px 14px' : '7px 12px',
-              display:'flex', justifyContent:'space-between',
-              alignItems:'center',
-              boxShadow: showPoisonGlow ? `0 0 12px ${poisonGlow}40` : 'none',
-            }}>
-              <div style={{ display:'flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
-                <span style={{
-                  color: showPoisonGlow ? poisonGlow : lineColor,
-                  fontWeight: line.isPrimary ? 700 : 400,
-                  fontSize: line.isPrimary ? 14 : 13,
-                }}>
-                  {srcIcon} {line.label}
-                </span>
-                {/* Poison badge inline na linha principal */}
-                {showPoisonGlow && primaryTrigger && (
-                  <span style={{
-                    background: `${primaryTrigger.color}25`,
-                    border: `1px solid ${primaryTrigger.color}60`,
-                    color: primaryTrigger.color,
-                    fontSize: 10, fontWeight: 700,
-                    padding: '1px 6px', borderRadius: 4,
-                  }}>
-                    {primaryTrigger.icon} {primaryTrigger.tag}
-                  </span>
-                )}
-                {/* Badge de hit rate da base histórica */}
-                {line.source === 'historico' && line.hitRate && (
-                  <span style={{
-                    background: '#1f3a5f',
-                    color: '#58a6ff',
-                    fontSize: 10, fontWeight: 600,
-                    padding: '2px 6px', borderRadius: 4,
-                  }}>
-                    base {Math.round(line.hitRate * 100)}% HR
-                  </span>
-                )}
-              </div>
-              <span style={{
-                color: !hasOdd ? '#555' :
-                       !isOpera ? '#d29922' :
-                       line.isPrimary ? '#e6edf3' : '#8b949e',
-                fontWeight: line.isPrimary ? 700 : 400,
-                fontSize: line.isPrimary ? 16 : 14,
-              }}>
-                {hasOdd ? line.odd.toFixed(2) : (
-                  <span style={{ fontSize:11, color:'#555' }}>
-                    sem odd
-                  </span>
-                )}
+      {/* ── BLOCO PRINCIPAL ─── */}
+      {mainLine && (
+        <div style={{ background: '#0d2818', border: '1px solid #3fb950',
+          borderRadius: 10, padding: '12px 14px', marginBottom: 8 }}>
+          <div style={{ fontSize: 11, color: '#f0c040', fontWeight: 700,
+            marginBottom: 4 }}>
+            🎯 LINHA PRINCIPAL
+            {isPoisonActive && (
+              <span style={{ marginLeft: 8, color: primaryTrigger?.color }}>
+                {primaryTrigger?.icon} {primaryTrigger?.tag}
               </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between',
+            alignItems: 'center' }}>
+            <span style={{ fontWeight: 700, fontSize: 14, color: '#e6edf3' }}>
+              {mainLine.label}
+            </span>
+            <span style={{ fontWeight: 700, fontSize: 16 }}>
+              {mainLine.odd > 0 ? mainLine.odd.toFixed(2) : 'sem odd'}
+            </span>
+          </div>
+          {/* EV da linha principal */}
+          {(() => {
+            const ev = calcEV(mainLine.odd, mainLine.prob)
+            const tag = getValueTag(ev)
+            return (
+              <div style={{ display: 'flex', gap: 8, marginTop: 6,
+                alignItems: 'center' }}>
+                <span style={{ fontSize: 11, color: tag.color, fontWeight: 700,
+                  background: tag.color + '20', padding: '2px 8px',
+                  borderRadius: 4 }}>
+                  {tag.label}
+                </span>
+                {ev !== null && (
+                  <span style={{ fontSize: 11, color: '#8b949e' }}>
+                    EV {ev >= 0 ? '+' : ''}{(ev * 100).toFixed(0)}%
+                  </span>
+                )}
+                <span style={{ fontSize: 11, color: '#8b949e', marginLeft: 'auto' }}>
+                  validado pelo engine
+                </span>
+              </div>
+            )
+          })()}
+        </div>
+      )}
+
+      {/* ── LINHAS COMPLEMENTARES ─── */}
+      {dedupedComboLines.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 4,
+            textTransform: 'uppercase', letterSpacing: 1 }}>
+            Linhas Complementares
+          </div>
+          {dedupedComboLines.map((line: any, i: number) => {
+            const ev = calcEV(line.odd, line.prob)
+            const tag = getValueTag(ev)
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'center',
+                gap: 8, padding: '7px 10px', background: '#161b22',
+                border: '1px solid #30363d', borderRadius: 8, marginBottom: 4 }}>
+                <div style={{ flex: 1 }}>
+                  <span style={{ fontSize: 13, color: '#c9d1d9' }}>
+                    {line.label}
+                  </span>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 3 }}>
+                    <span style={{ fontSize: 10, color: line.sourceColor,
+                      background: line.sourceColor + '20', padding: '1px 6px',
+                      borderRadius: 4 }}>
+                      {line.source}
+                    </span>
+                    <span style={{ fontSize: 10, color: tag.color }}>
+                      {tag.label}
+                    </span>
+                    {ev !== null && (
+                      <span style={{ fontSize: 10, color: '#555' }}>
+                        EV {ev >= 0 ? '+' : ''}{(ev*100).toFixed(0)}%
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <span style={{ fontWeight: 600, fontSize: 14,
+                  color: line.odd > 0 ? '#e6edf3' : '#555' }}>
+                  {line.odd > 0 ? line.odd.toFixed(2) : 'sem odd'}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* ── RECOMENDAÇÃO DE ENTRADA ─── */}
+      {bestBet && (
+        <div style={{ background: '#1c2128', border: '1px solid #58a6ff',
+          borderRadius: 10, padding: '10px 14px', marginTop: 4 }}>
+          <div style={{ fontSize: 10, color: '#58a6ff', fontWeight: 700,
+            marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>
+            💡 Entrada Sugerida
+          </div>
+          <div style={{ fontSize: 13, color: '#e6edf3', marginBottom: 4 }}>
+            <strong>Singular:</strong> {bestBet.label} @ {bestBet.odd.toFixed(2)}
+          </div>
+          {bestDouble && (
+            <div style={{ fontSize: 13, color: '#8b949e' }}>
+              <strong style={{ color: '#c9d1d9' }}>Dupla:</strong>{' '}
+              {bestBet.label} + {bestDouble.label}{' '}
+              <strong style={{ color: '#f0c040' }}>@ {doubleOdd}</strong>
+              {isPoisonActive && (
+                <span style={{ color: primaryTrigger?.color, marginLeft: 6 }}>
+                  🔥 Poison
+                </span>
+              )}
             </div>
-          );
-        })}
-      </div>
+          )}
+        </div>
+      )}
 
       {/* POISON TRIGGERS */}
       <PoisonBadges poison={game.poison} />
