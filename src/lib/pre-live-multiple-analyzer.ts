@@ -39,7 +39,7 @@ const TIER_CONFIG: Record<string, { nGames: number; minGames: number; marketsPer
   gold:      { nGames: 4, minGames: 3, marketsPerGame: 1, stake: 25, minTotal: 3.0,  maxTotal: 15.0 },
   agressivo: { nGames: 6, minGames: 5, marketsPerGame: 1, stake: 15, minTotal: 4.0,  maxTotal: 40.0 },
   bingo:     { nGames: 8, minGames: 6, marketsPerGame: 1, stake: 10, minTotal: 5.0,  maxTotal: 80.0 },
-  sinfonia:  { nGames: 2, minGames: 2, marketsPerGame: 6, stake: 20, minTotal: 1.5,  maxTotal: 20.0 }, // 🆕 Sinfonia: teto teórico=6; cap real é dinâmico por qualidade do jogo
+  sinfonia:  { nGames: 1, minGames: 1, marketsPerGame: 6, stake: 20, minTotal: 0, maxTotal: 0 }, // 🆕 Sinfonia: sem cap de jogos, cap dinâmico por qualidade
   ftbox:     { nGames: 3, minGames: 2, marketsPerGame: 2, stake: 25, minTotal: 2.0,  maxTotal: 15.0 }, // 🆕 FT Box: foco em mercados FT de time
 };
 // Qualidade mínima por jogo (gate de entrada) - REDUZIDO TEMPORARIAMENTE
@@ -830,6 +830,16 @@ export class PreLiveMultipleAnalyzer {
         gameProfile: profile || "generic",
         confidence: Math.round(conf * 100),
         _meta: { score, fav: (fav as any)?.nome || "" },
+        // 🆕 Adicionar gameStats para justificativa na UI
+        gameStats: {
+          chFavGol:   fav.chFavGol   ?? 0,
+          cantFavHT:  fav.cantFavHT  ?? 0,
+          cantFTH:    g.cantFTH     ?? 0,
+          cantFTA:    g.cantFTA     ?? 0,
+          gol05HTFav: fav.gol05HTFav ?? 0,
+          xgH:        g.xgH        ?? g.xG ?? 0,  // 🆕 Adicionar fallback xG
+          xgA:        g.xgA        ?? 0,
+        },
       }));
     };
 
@@ -936,9 +946,86 @@ export class PreLiveMultipleAnalyzer {
       };
     };
 
-    // 1️⃣ Sinfonia de Pardais gerada PRIMEIRO para ter prioridade nas micro-linhas
-    const sinfonia = buildSGPTicket('sinfonia', 'low', '🐦 Sinfonia de Pardais');
-    if (sinfonia) suggestions.push(sinfonia);
+    // 🆕 1️⃣ Sinfonia de Pardais — 1 card por jogo qualificado
+    const sinfoniaGames = topGames.filter(g =>
+      detectPoisonTriggers(g).isPoison || (computeScore(g) as any)?.score > 0.60
+    )
+
+    for (const g of sinfoniaGames) {
+      const poison = detectPoisonTriggers(g)
+      const sr = computeScore(g)
+      const sc = typeof sr === 'number' ? sr : (sr as any)?.score ?? 0
+
+      // Cap dinâmico por qualidade — igual à lógica atual
+      let effectiveMax = 3
+      if (poison.isPoison) effectiveMax = 5
+      else if (sc > 0.70) effectiveMax = 4
+
+      // usedSigs INDIVIDUAL por jogo — sem compartilhar entre jogos
+      const gameSigs = new Set<string>()
+      const markets = this.getGameMarkets(g, gameSigs, effectiveMax, undefined, true)
+
+      if (markets.length < 2) {
+        console.log(`SGP-sinfonia ${g.match} menos de 2 mercados, pulando`)
+        continue
+      }
+
+      const gameOdd = markets.reduce((acc: number, m: any) => acc * (m._resolvedOdd ?? m.resolvedOdd ?? 1), 1)
+      const confResult = computeConfidence(g)
+      const conf = (confResult as any)?.score ?? 0
+      const scoreResult = computeScore(g)
+      const score = typeof scoreResult === 'number' ? scoreResult : (scoreResult as any)?.score ?? 0
+      const profile = classifyProfile(g)
+      const fav = getFavorito(g)
+      const matchName = (g?.match ?? `${g?.home} x ${g?.away}`).trim()
+      const poisonTag = poison.isPoison ? (poison.primaryTrigger?.icon ?? poison.primaryTrigger?.tag) : ''
+
+      const selections = markets.map((m: any) => ({
+        match: matchName,
+        league: g?.league ?? '',
+        hour: g?.hour ?? '',
+        market: m.label,
+        odd: m._resolvedOdd ?? m.resolvedOdd ?? 0,
+        minOdd: 0,
+        hasValue: true,
+        edge: 0,
+        recommendation: 'Operável',
+        oddTag: '',
+        reason: `Sinfonia de Pardais${poisonTag ? ' · ' + poisonTag : ''}`,
+        gameProfile: profile ?? 'generic',
+        confidence: Math.round(conf * 100),
+        _meta: { score, fav: (fav as any)?.nome || "" },
+        gameStats: {
+          chFavGol:   (fav as any)?.chFavGol   ?? 0,
+          cantFavHT:  (fav as any)?.cantFavHT  ?? 0,
+          cantFTH:    g?.cantFTH     ?? 0,
+          cantFTA:    g?.cantFTA     ?? 0,
+          gol05HTFav: (fav as any)?.gol05HTFav ?? 0,
+          xgH:        g?.xgH        ?? g?.xG ?? 0,
+          xgA:        g?.xgA        ?? 0,
+          scoreValue: Math.round(score * 100),
+          isPoison: poison.isPoison,
+          poisonTag,
+        },
+      }))
+
+      const expectedValue = gameOdd * conf - 1
+      const sinfoniaCard: LiveMultipleSuggestion = {
+        id: `sinfonia-${Date.now()}-${PreLiveMultipleAnalyzer.suggestionCounter++}`,
+        type: 'sinfonia',
+        confidence: Math.round(conf * 100),
+        expectedValue,
+        riskLevel: 'low',
+        selections,
+        combinedOdd: parseFloat(gameOdd.toFixed(2)),
+        suggestedStake: 20,
+        expectedReturn: parseFloat((gameOdd * 20).toFixed(2)),
+        riskReward: expectedValue > 0.08 ? 'Excelente' : expectedValue > 0.04 ? 'Bom' : 'Moderado',
+      }
+
+      console.log(`SGP-sinfonia CARD ${matchName} | ${markets.length} pernas | odd ${gameOdd.toFixed(2)}`)
+      suggestions.push(sinfoniaCard)
+    }
 
     // 2️⃣ Múltiplas Clássicas (1 mercado por jogo) geradas na sequência
     const seguro = buildSGPTicket('bronze', 'low', '🛡️ Seguro');
