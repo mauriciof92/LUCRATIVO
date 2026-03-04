@@ -45,7 +45,20 @@ function GameCard({ game }: { game: any }) {
     return (prob * odd) - 1
   }
 
-  const getValueTag = (ev: number | null) => {
+  const getValueTag = (ev: number | null, odd: number | null, minOdd: number | null = null, source: string | null = null) => {
+    // 🆕 Reforma Odds: Verificar se odd real é suficiente
+    if (source === 'estimated') {
+      return { label: `~${odd?.toFixed(2) ?? minOdd?.toFixed(2)} estimada`, color: '#8b949e' }
+    }
+    
+    if (odd !== null && minOdd !== null && odd < minOdd) {
+      return { label: `⚠️ Odd baixa (${odd.toFixed(2)} < ${minOdd.toFixed(2)})`, color: '#f85149' }
+    }
+    
+    if (odd === null && minOdd !== null) {
+      return { label: `Mín. EV: ${minOdd.toFixed(2)}`, color: '#555' }
+    }
+    
     if (ev === null) return { label: 'Sem dado', color: '#555' }
     if (ev >= 0.20) return { label: '🔥 Alto EV', color: '#3fb950' }
     if (ev >= 0.08) return { label: '✅ Tem valor', color: '#58a6ff' }
@@ -69,8 +82,10 @@ function GameCard({ game }: { game: any }) {
   const mainLine = game.mainMarket?.label ? {
     label: game.mainMarket.label,
     odd: Number(game.mainMarket.odd ?? 0),
+    minOdd: Number(game.mainMarket.minOdd ?? 0), // 🆕 Reforma Odds
+    source: game.mainMarket.source ?? null, // 🆕 Adicionar source
     prob: gameConf,           // validado pelo engine completo
-    source: 'Principal',
+    sourceLabel: 'Principal',
     sourceColor: '#f0c040',
     isPrimary: true,
   } : null
@@ -84,8 +99,10 @@ function GameCard({ game }: { game: any }) {
       return {
         label: c.label,
         odd: Number(c.odd ?? 0),
+        minOdd: Number(c.minOdd ?? 0), // 🆕 Reforma Odds
+        source: c.source ?? null, // 🆕 Adicionar source
         prob: hitRate,
-        source: hitMatch ? `${hitMatch[1]}% histórico` : 'Engine',
+        sourceLabel: hitMatch ? `${hitMatch[1]}% histórico` : 'Engine',
         sourceColor: hitMatch ? '#3fb950' : '#8b949e',
         isPrimary: false,
       }
@@ -94,8 +111,10 @@ function GameCard({ game }: { game: any }) {
   const patternLines = (game.patternLines ?? []).map((p: any) => ({
     label: p.label,
     odd: Number(p.odd ?? 0),
+    minOdd: Number(p.minOdd ?? 0), // 🆕 Reforma Odds
+    source: p.source ?? null, // 🆕 Adicionar source
     prob: p.hitRate ?? null,
-    source: p.hitRate ? `${Math.round(p.hitRate*100)}% Poisson` : 'Poisson',
+    sourceLabel: p.hitRate ? `${Math.round(p.hitRate*100)}% Poisson` : 'Poisson',
     sourceColor: '#58a6ff',
     isPrimary: false,
   }))
@@ -196,19 +215,19 @@ function GameCard({ game }: { game: any }) {
               {mainLine.label}
             </span>
             <span style={{ fontWeight: 700, fontSize: 16 }}>
-              {mainLine.odd > 0 ? mainLine.odd.toFixed(2) : 'sem odd'}
+              {mainLine.odd > 0 ? mainLine.odd.toFixed(2) : mainLine.minOdd > 0 ? `Mín: ${mainLine.minOdd.toFixed(2)}` : 'sem odd'}
             </span>
           </div>
           {/* EV da linha principal */}
           {(() => {
             const ev = calcEV(mainLine.odd, mainLine.prob)
-            const tag = getValueTag(ev)
+            const tag = getValueTag(ev, mainLine.odd, mainLine.minOdd, mainLine.source)
             return (
               <div style={{ display: 'flex', gap: 8, marginTop: 6,
                 alignItems: 'center' }}>
-                <span style={{ fontSize: 11, color: tag.color, fontWeight: 700,
-                  background: tag.color + '20', padding: '2px 8px',
-                  borderRadius: 4 }}>
+                <span style={{ fontSize: 11, fontWeight: 600,
+                  color: tag.color, background: `${tag.color}15`,
+                  padding: '2px 6px', borderRadius: 4 }}>
                   {tag.label}
                 </span>
                 {ev !== null && (
@@ -216,9 +235,6 @@ function GameCard({ game }: { game: any }) {
                     EV {ev >= 0 ? '+' : ''}{(ev * 100).toFixed(0)}%
                   </span>
                 )}
-                <span style={{ fontSize: 11, color: '#8b949e', marginLeft: 'auto' }}>
-                  validado pelo engine
-                </span>
               </div>
             )
           })()}
@@ -234,21 +250,29 @@ function GameCard({ game }: { game: any }) {
           </div>
           {dedupedComboLines.map((line: any, i: number) => {
             const ev = calcEV(line.odd, line.prob)
-            const tag = getValueTag(ev)
+            const tag = getValueTag(ev, line.odd, line.minOdd, line.source)
             return (
               <div key={i} style={{ display: 'flex', alignItems: 'center',
                 gap: 8, padding: '7px 10px', background: '#161b22',
-                border: '1px solid #30363d', borderRadius: 8, marginBottom: 4 }}>
-                <div style={{ flex: 1 }}>
-                  <span style={{ fontSize: 13, color: '#c9d1d9' }}>
-                    {line.label}
+                borderRadius: 6, border: '1px solid #30363d' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%',
+                    background: line.sourceColor }} />
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ fontSize: 12, color: '#e6edf3',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {line.label}
+                    </div>
+                    <div style={{ fontSize: 10, color: '#8b949e', marginTop: 1 }}>
+                      {line.prob !== null ? `${(line.prob * 100).toFixed(0)}% prob` : 'sem prob'}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: '#e6edf3' }}>
+                    {line.odd > 0 ? line.odd.toFixed(2) : line.minOdd > 0 ? `Mín: ${line.minOdd.toFixed(2)}` : 'sem odd'}
                   </span>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 3 }}>
-                    <span style={{ fontSize: 10, color: line.sourceColor,
-                      background: line.sourceColor + '20', padding: '1px 6px',
-                      borderRadius: 4 }}>
-                      {line.source}
-                    </span>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
                     <span style={{ fontSize: 10, color: tag.color }}>
                       {tag.label}
                     </span>
@@ -259,10 +283,6 @@ function GameCard({ game }: { game: any }) {
                     )}
                   </div>
                 </div>
-                <span style={{ fontWeight: 600, fontSize: 14,
-                  color: line.odd > 0 ? '#e6edf3' : '#555' }}>
-                  {line.odd > 0 ? line.odd.toFixed(2) : 'sem odd'}
-                </span>
               </div>
             )
           })}

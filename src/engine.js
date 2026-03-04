@@ -51,6 +51,8 @@ function extractOdds(rowValues) {
     "Odds Ambas marcarem (Sim)",
     "Odds Mais de 0.5 gols 1T",
     "Odds Mais de 8.5 escanteios FT",
+    "Odds Mais de 1.5 gols FT",    // ← ADICIONAR - Reforma Odds
+    "Odds Under 2.5 gols FT",      // ← ADICIONAR - Reforma Odds
   ];
   const odds = {};
   for (let i = 0; i < names.length; i++) {
@@ -967,6 +969,20 @@ function correlated(sel, axis) {
   });
 }
 
+// 🆕 Implicações lógicas que tornam combinações inválidas - Bug 2
+const LOGICAL_IMPLICATIONS = [
+  ['btts', 'gols'],       // BTTS implica Over 1.5 FT
+  ['gols_btts', 'gols'],   // Over 2.5 + BTTS implica Over 1.5
+  ['fav_gols', 'gols'],    // Favorito Vence + Over → implica Over 1.5
+];
+
+// 🆕 Verificar se combinação é logicamente redundante
+function isLogicallyRedundant(axisA, axisB) {
+  return LOGICAL_IMPLICATIONS.some(([a, b]) =>
+    (axisA === a && axisB === b) || (axisA === b && axisB === a)
+  );
+}
+
 export function suggestCombo(g) {
   const main = suggestMainMarket(g);
   const fav  = getFavorito(g);
@@ -1161,6 +1177,12 @@ export function suggestCombo(g) {
   const result   = [{ label: main.label, icon: main.icon, color: main.color }];
   for (const c of cands) {
     if (!correlated(selected, c.axis)) {
+      // 🆕 Verificar redundância lógica - Bug 2
+      const mainAxis = selected[0]?.axis;
+      if (mainAxis && isLogicallyRedundant(mainAxis, c.axis)) {
+        continue; // Pular combinações logicamente redundantes
+      }
+      
       selected.push(c);
       result.push({ label: c.label, icon: c.icon, color: "#e6f1ff" });
     }
@@ -1510,38 +1532,34 @@ export function detectPoisonTriggers(g) {
 /* ─────────────────────────────────────────
    VALUE BET DETECTION - PROBABILIDADE DINÂMICA
 ───────────────────────────────────────── */
-export function calculateValueBet(g, marketLabel, odd) {
-  // Relaxando a restrição de odd <= 1, pois as micro-linhas ou fallbacks podem ter valor 1.01+
-  if (!odd || odd <= 1.01) return { hasValue: false, edge: 0, impliedProb: 0, ourProb: 0, minOdd: 0 };
-  
-  // Calculate implied probability from odds
-  const impliedProb = 1 / odd;
-  
+
+// 🆕 Função auxiliar para calcular nossa probabilidade
+function calcOurProb(g, marketLabel, score = null, fav = null, profile = null) {
   // 🎯 Obter score e confiança dinâmicos com validação
-  const scoreResult = computeScore(g);
-  const score = scoreResult?.score || 0;
+  const scoreResult = score !== null ? { score } : computeScore(g);
+  const finalScore = score !== null ? score : (scoreResult?.score || 0);
   const confidence = computeConfidence(g)?.score || 0;
-  const profile = classifyProfile(g);
-  const fav = getFavorito(g);
+  const finalProfile = profile !== null ? profile : classifyProfile(g);
+  const finalFav = fav !== null ? fav : getFavorito(g);
   
   // 📊 Probabilidade real baseada no score (dinâmica)
   let ourProb = 0;
   
   // Base probability from score (0.60 - 0.95 range) - Equilibrado para odds realistas
-  ourProb = 0.60 + (score * 0.35);
+  ourProb = 0.60 + (finalScore * 0.35);
   
   // 🎯 Ajuste fino baseado no mercado específico
   const marketAdjustments = {
     // Finalizações HT - depende de chutes e força
     'finalizacoes_ht': () => {
-      const shotProb = Math.min((fav?.chFavGol || 0) / 8, 0.9); // Max 90% se muitos chutes
-      const strengthBonus = Math.min((fav?.afDiff || 0) / 60, 0.1); // Bônus por força
+      const shotProb = Math.min((finalFav?.chFavGol || 0) / 8, 0.9); // Max 90% se muitos chutes
+      const strengthBonus = Math.min((finalFav?.afDiff || 0) / 60, 0.1); // Bônus por força
       return ourProb + shotProb * 0.3 + strengthBonus;
     },
     
     // Gols HT - depende de probabilidade histórica
     'gols_ht': () => {
-      const htProb = (fav?.gol05HTFav || 0) / 100;
+      const htProb = (finalFav?.gol05HTFav || 0) / 100;
       return ourProb + htProb * 0.4;
     },
     
@@ -1565,13 +1583,13 @@ export function calculateValueBet(g, marketLabel, odd) {
     
     // BTTS - depende de equilíbrio ofensivo
     'btts': () => {
-      const balanceBonus = ((fav?.afDiff || 0) <= 20 && (g?.exG || 0) >= 3) ? 0.15 : 0.05;
+      const balanceBonus = ((finalFav?.afDiff || 0) <= 20 && (g?.exG || 0) >= 3) ? 0.15 : 0.05;
       return ourProb + balanceBonus;
     },
     
     // Favorito vence - baseado em diferença de força
     'fav': () => {
-      const winProb = Math.min((fav?.afDiff || 0) / 80, 0.9);
+      const winProb = Math.min((finalFav?.afDiff || 0) / 80, 0.9);
       return ourProb + winProb * 0.4;
     }
   };
@@ -1601,40 +1619,80 @@ export function calculateValueBet(g, marketLabel, odd) {
     generic: 0
   };
   
-  ourProb += profileBonus[profile] || 0;
+  ourProb += profileBonus[finalProfile] || 0;
   
   // ✅ Garantir range válido (0 - 0.95 máximo)
   ourProb = Math.max(0.05, Math.min(0.95, ourProb));
   
-  // 🎯 Calcular odd mínima exigida (dinâmica)
-  // Score alto (>0.75): multiplicador 0.50 (mais flexível)
-  // Score baixo: multiplicador 0.40 (mais exigente)
-  const marginMultiplier = score > 0.75 ? 1.50 : 1.40; // 50% ou 40% de margem
-  const minOdd = ourProb > 0 ? (1 / ourProb) * marginMultiplier : 5.0;
-  
-  // 📊 Calcular edge (vantagem)
-  const edge = ourProb - impliedProb;
-  const hasValue = edge > 0.02; // Mínimo 2% de vantagem
-  
-  // 🛡️ Tratamento de NaN para garantir valores válidos
-  const safeEdge = isNaN(edge) ? 0 : edge;
-  const safeImpliedProb = isNaN(impliedProb) ? 0 : impliedProb;
-  const safeOurProb = isNaN(ourProb) ? 0 : ourProb;
-  const safeMinOdd = isNaN(minOdd) ? 5.0 : minOdd;
-  const safeScore = isNaN(score) ? 0 : score;
-  const safeConfidence = isNaN(confidence) ? 0 : confidence;
-  
+  return ourProb;
+}
+
+export function calculateValueBet(g, marketLabel, resolution) {
+  // BLOCO DE COMPATIBILIDADE — suporta chamada antiga (odd: number) e nova (OddsResolution)
+  let marketOdd, minOdd, source
+  if (resolution !== null && typeof resolution === 'object' && 'marketOdd' in resolution) {
+    // Nova interface OddsResolution
+    marketOdd = resolution.marketOdd
+    minOdd    = resolution.minOdd
+    source    = resolution.source
+  } else {
+    // Chamada legada: calculateValueBet(g, label, 1.85)
+    marketOdd = (typeof resolution === 'number' && resolution > 1.01) ? resolution : null
+    minOdd    = getMinOddForLabel(marketLabel) ?? 1.30
+    source    = marketOdd ? 'legacy' : null
+  }
+
+  // ← ESTAS 4 LINHAS ESTAVAM FALTANDO (causando os 2 erros)
+  const _scoreResult  = computeScore(g)
+  const score         = typeof _scoreResult === 'number' ? _scoreResult : (_scoreResult?.score ?? 0)
+  const confidence    = computeConfidence(g)?.score ?? 0
+  const fav           = getFavorito(g)
+  const profile       = classifyProfile(g)
+
+  // Se sem odd real, retornar apenas minOdd + ourProb
+  if (marketOdd === null) {
+    const ourProb = calcOurProb(g, marketLabel, score, fav, profile)
+    return {
+      hasValue: null,
+      edge: null,
+      impliedProb: null,
+      ourProb: Math.round(ourProb * 100),
+      minOdd: minOdd,
+      recommendation: 'Odd real indisponível',
+      dataSource: source,
+      score: Math.round(score * 100),
+      confidence: Math.round(confidence * 100),
+    }
+  }
+
+  // Com odd real — cálculo normal de EV
+  if (marketOdd <= 1.01) {
+    return { hasValue: false, edge: 0, impliedProb: 0, ourProb: 0, minOdd, dataSource: source }
+  }
+
+  const impliedProb = 1 / marketOdd
+  const ourProb     = calcOurProb(g, marketLabel, score, fav, profile)
+  const edge        = ourProb - impliedProb
+  const hasValue    = edge > 0.02
+
+  const safeEdge       = isNaN(edge) ? 0 : edge
+  const safeImpliedProb = isNaN(impliedProb) ? 0 : impliedProb
+  const safeOurProb    = isNaN(ourProb) ? 0 : ourProb
+
   return {
     hasValue: !isNaN(safeEdge) && safeEdge > 0.02,
-    edge: Math.round(safeEdge * 100), // Como percentual
-    impliedProb: Math.round(safeImpliedProb * 100),
-    ourProb: Math.round(safeOurProb * 100),
-    minOdd: Math.round(safeMinOdd * 100) / 100,
-    recommendation: safeEdge > 0.08 ? 'Forte valor' : safeEdge > 0.04 ? 'Valor moderado' : safeEdge > 0.02 ? 'Valor baixo' : 'Sem valor',
-    marketKey,
-    score: Math.round(safeScore * 100),
-    confidence: Math.round(safeConfidence * 100)
-  };
+    edge:         Math.round(safeEdge * 100),
+    impliedProb:  Math.round(safeImpliedProb * 100),
+    ourProb:      Math.round(safeOurProb * 100),
+    minOdd,
+    recommendation: safeEdge > 0.08 ? 'Forte valor'
+                  : safeEdge > 0.04 ? 'Valor moderado'
+                  : safeEdge > 0.02 ? 'Valor baixo'
+                  : 'Sem valor',
+    dataSource: source,
+    score:      Math.round(score * 100),
+    confidence: Math.round(confidence * 100),
+  }
 }
 
 /* ─────────────────────────────────────────

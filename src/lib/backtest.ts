@@ -28,6 +28,7 @@ export interface BetResult {
     label: string;
     odd: number | null;
     minOdd: number | null;
+    source?: 'csv' | 'api-real' | 'estimated' | null; // 🆕 Adicionar source
     stake: number;
     result: "win" | "lose" | "push" | "no-odd" | "avg" | "pending_manual";
     profit: number;
@@ -38,6 +39,7 @@ export interface BetResult {
     label: string;
     odd: number | null;
     minOdd: number | null;
+    source?: 'csv' | 'api-real' | 'estimated' | null; // 🆕 Adicionar source
     stake: number;
     result: "win" | "lose" | "push" | "no-odd" | "avg" | "pending_manual";
     profit: number;
@@ -174,7 +176,14 @@ export function processNSGames(csvText: string): BetResult[] {
     const mainMinOdd = getMinOddForLabel(main.label);
     // Fallback: usar odd estimada quando CSV não tem (Finalizações HT, Cantos HT)
     const mainOdd = (typeof mainOddRaw === 'number' && mainOddRaw > 1) ? mainOddRaw : mainMinOdd;
-    const valueAnalysis = calculateValueBet(g, main.label, mainOdd);
+    
+    // 🆕 Reforma Odds: criar OddsResolution para calculateValueBet
+    const mainResolution = {
+      marketOdd: mainOddRaw && mainOddRaw > 1 ? mainOddRaw : null,
+      minOdd: mainMinOdd,
+      source: mainOddRaw && mainOddRaw > 1 ? 'csv' : 'estimated'
+    };
+    const valueAnalysis = calculateValueBet(g, main.label, mainResolution);
     const isFT = g.status === 'FT';
 
     // Para jogos FT, resolver resultado; para NS, manter "no-odd"
@@ -188,11 +197,18 @@ export function processNSGames(csvText: string): BetResult[] {
       const minOdd = getMinOddForLabel(item.label);
       // Fallback: usar odd estimada quando CSV não tem
       const odd = (typeof oddRaw === 'number' && oddRaw > 1) ? oddRaw : minOdd;
-      const val = calculateValueBet(g, item.label, odd);
+      
+      // 🆕 Reforma Odds: criar OddsResolution para calculateValueBet
+      const resolution = {
+        marketOdd: oddRaw && oddRaw > 1 ? oddRaw : null,
+        minOdd: minOdd,
+        source: oddRaw && oddRaw > 1 ? 'csv' : 'estimated'
+      };
+      const val = calculateValueBet(g, item.label, resolution);
       const result = isFT ? resolveMarketResult(item.label, g) : "no-odd";
       const profit = result === "win" ? (odd ?? 0) * stake - stake
                    : result === "lose" ? -stake : 0;
-      return { label: item.label, odd, minOdd, stake, result, profit, hasValue: !!val?.hasValue };
+      return { label: item.label, odd, minOdd, source: resolution.source as 'csv' | 'api-real' | 'estimated' | null, stake, result, profit, hasValue: !!val?.hasValue || false };
     });
 
     results.push({
@@ -208,10 +224,11 @@ export function processNSGames(csvText: string): BetResult[] {
         label: main.label,
         odd: mainOdd,
         minOdd: mainMinOdd,
+        source: mainResolution.source as 'csv' | 'api-real' | 'estimated' | null, // 🆕 Adicionar source
         stake,
         result: mainResult,
         profit: mainProfit,
-        hasValue: !!valueAnalysis?.hasValue,
+        hasValue: !!valueAnalysis?.hasValue || false,
       },
       combo: comboResults,
       score: scoreVal,
@@ -270,19 +287,33 @@ export function runBacktest(csvText: string, options: { useRiskManagement?: bool
 
     const mainOdd = getOddForLabel(g, main.label);
     const mainMinOdd = getMinOddForLabel(main.label);
-    const valueAnalysis = calculateValueBet(g, main.label, mainOdd);
-    const mainHasValue = valueAnalysis.hasValue;
+    
+    // 🆕 Reforma Odds: criar OddsResolution para calculateValueBet
+    const mainResolution = {
+      marketOdd: mainOdd && mainOdd > 1 ? mainOdd : null,
+      minOdd: mainMinOdd,
+      source: mainOdd && mainOdd > 1 ? 'csv' : 'estimated'
+    };
+    const valueAnalysis = calculateValueBet(g, main.label, mainResolution);
+    const mainHasValue = !!valueAnalysis.hasValue || false;
     const mainResult = resolveMarketResult(main.label, g);
     const mainProfit = (mainResult === "win" || mainResult === "avg") ? (mainOdd ?? 0) * stake - stake : mainResult === "lose" ? -stake : 0;
 
     const comboResults = combo.map(item => {
       const odd = getOddForLabel(g, item.label);
       const minOdd = getMinOddForLabel(item.label);
-      const valueAnalysis = calculateValueBet(g, item.label, odd);
-      const hasValue = valueAnalysis.hasValue;
+      
+      // 🆕 Reforma Odds: criar OddsResolution para calculateValueBet
+      const resolution = {
+        marketOdd: odd && odd > 1 ? odd : null,
+        minOdd: minOdd,
+        source: odd && odd > 1 ? 'csv' : 'estimated'
+      };
+      const valueAnalysis = calculateValueBet(g, item.label, resolution);
+      const hasValue = !!valueAnalysis.hasValue || false;
       const result = resolveMarketResult(item.label, g);
       const profit = (result === "win" || result === "avg") ? (odd ?? 0) * stake - stake : result === "lose" ? -stake : 0;
-      return { label: item.label, odd, minOdd, stake, result, profit, hasValue };
+      return { label: item.label, odd, minOdd, source: resolution.source as 'csv' | 'api-real' | 'estimated' | null, stake, result, profit, hasValue };
     });
 
     results.push({
@@ -298,6 +329,7 @@ export function runBacktest(csvText: string, options: { useRiskManagement?: bool
         label: main.label,
         odd: mainOdd,
         minOdd: mainMinOdd,
+        source: mainResolution.source as 'csv' | 'api-real' | 'estimated' | null, // 🆕 Adicionar source
         stake,
         result: mainResult,
         profit: mainProfit,

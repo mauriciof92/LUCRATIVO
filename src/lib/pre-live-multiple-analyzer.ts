@@ -7,6 +7,7 @@ import {
 } from './footballApi';
 
 import { parseCSV, getOddForLabel, classifyProfile, getFavorito, computeConfidence, computeScore, calculateValueBet, getMinOddForLabel, suggestMainMarket, suggestCombo, detectPoisonTriggers, suggestBetBuilder, extractDateFromHour } from "../engine";
+import { OddsResolution } from '../types/odds';
 
 // ── FUNÇÕES POISSON ─────────────────────────────────────────────────────────────
 // Memoizar factorial para não recalcular
@@ -37,8 +38,8 @@ const TIER_CONFIG: Record<string, { nGames: number; minGames: number; marketsPer
   bronze:    { nGames: 2, minGames: 2, marketsPerGame: 1, stake: 50, minTotal: 1.5,  maxTotal: 5.0  },
   silver:    { nGames: 3, minGames: 2, marketsPerGame: 1, stake: 35, minTotal: 2.0,  maxTotal: 10.0 },
   gold:      { nGames: 4, minGames: 3, marketsPerGame: 1, stake: 25, minTotal: 3.0,  maxTotal: 15.0 },
-  agressivo: { nGames: 6, minGames: 5, marketsPerGame: 1, stake: 15, minTotal: 4.0,  maxTotal: 40.0 },
-  bingo:     { nGames: 8, minGames: 6, marketsPerGame: 1, stake: 10, minTotal: 5.0,  maxTotal: 80.0 },
+  agressivo: { nGames: 6, minGames: 3, marketsPerGame: 1, stake: 15, minTotal: 4.0,  maxTotal: 40.0 }, // ← minGames reduzido de 5 para 3
+  bingo:     { nGames: 8, minGames: 4, marketsPerGame: 1, stake: 10, minTotal: 5.0,  maxTotal: 80.0 }, // ← minGames reduzido de 6 para 4
   sinfonia:  { nGames: 1, minGames: 1, marketsPerGame: 6, stake: 20, minTotal: 0, maxTotal: 0 }, // 🆕 Sinfonia: sem cap de jogos, cap dinâmico por qualidade
   ftbox:     { nGames: 3, minGames: 2, marketsPerGame: 2, stake: 25, minTotal: 2.0,  maxTotal: 15.0 }, // 🆕 FT Box: foco em mercados FT de time
 };
@@ -233,15 +234,18 @@ export class PreLiveMultipleAnalyzer {
     return null;
   }
 
-  /** Busca a melhor odd disponível: real API > CSV > odd estimada (minOdd do engine) */
-  private getBestOdd(game: any, marketLabel: string): number {
-    const matchKey = game?.match || `${game?.home || ''} x ${game?.away || ''}`;
-    
-    // 1. Tentar odd real da API-Football
+  /** 🆕 Reforma Odds: resolve odd real vs minOdd */
+  private resolveOdd(game: any, marketLabel: string): OddsResolution {
+    const matchKey = game?.match ?? `${game?.home || ''} x ${game?.away || ''}`;
+    const minOdd = getMinOddForLabel(marketLabel) ?? 1.30;
+
+    // 1. Tentar API realOddsMap
     const realMarkets = this.realOddsMap[matchKey];
     if (realMarkets) {
       // Busca exata
-      if (realMarkets[marketLabel]) return realMarkets[marketLabel];
+      if (realMarkets[marketLabel]) {
+        return { marketOdd: realMarkets[marketLabel], minOdd, source: 'api-real' };
+      }
       
       // Busca fuzzy: "Finalizações HT Over 5.5" → procurar "Over 5.5" nos mercados reais
       const nl = marketLabel.toLowerCase();
@@ -249,28 +253,40 @@ export class PreLiveMultipleAnalyzer {
         const nk = key.toLowerCase();
         const lineMatch = nl.match(/over\s+(\d+\.\d+)/);
         if (lineMatch && nk.includes(`over ${lineMatch[1]}`)) {
-          if (nl.includes('finaliz') && nk.includes('finaliz')) return odd;
-          if (nl.includes('canto') && nk.includes('canto')) return odd;
-          if (nl.includes('gol') && nk.includes('gol')) return odd;
-          if (nl.includes('ft') && nk.includes('ft') && !nl.includes('canto')) return odd;
+          if (nl.includes('finaliz') && nk.includes('finaliz')) {
+            return { marketOdd: odd, minOdd, source: 'api-real' };
+          }
+          if (nl.includes('canto') && nk.includes('canto')) {
+            return { marketOdd: odd, minOdd, source: 'api-real' };
+          }
+          if (nl.includes('gol') && nk.includes('gol')) {
+            return { marketOdd: odd, minOdd, source: 'api-real' };
+          }
+          if (nl.includes('ft') && nk.includes('ft') && !nl.includes('canto')) {
+            return { marketOdd: odd, minOdd, source: 'api-real' };
+          }
         }
-        if (nl.includes('ambas marcam') && nk.includes('ambas marcam')) return odd;
-        if (nl.includes('btts') && nk.includes('btts')) return odd;
+        if (nl.includes('ambas marcam') && nk.includes('ambas marcam')) {
+          return { marketOdd: odd, minOdd, source: 'api-real' };
+        }
+        if (nl.includes('btts') && nk.includes('btts')) {
+          return { marketOdd: odd, minOdd, source: 'api-real' };
+        }
       }
     }
-    
-    // 2. Fallback: odd do CSV
+
+    // 2. Tentar CSV
     const csvOdd = getOddForLabel(game, marketLabel);
-    if (typeof csvOdd === 'number' && !isNaN(csvOdd) && csvOdd > 1) return csvOdd;
+    if (typeof csvOdd === 'number' && !isNaN(csvOdd) && csvOdd > 1.01) {
+      return { marketOdd: csvOdd, minOdd, source: 'csv' };
+    }
 
-    // 3. Fallback final: odd estimada conservadora do engine (para Finalizações HT, Cantos HT, etc.)
-    // O CSV não tem odds para esses mercados específicos, mas o engine tem estimativas seguras
-    const estimatedOdd = getMinOddForLabel(marketLabel);
-    if (typeof estimatedOdd === 'number' && estimatedOdd > 1) return estimatedOdd;
-
-    // 4. Fallback Universal: Se a estatística é boa, não descartamos por falta de odd no CSV.
-    // Retornamos uma odd mínima justa para permitir a geração do bilhete. A odd real será vista na casa de apostas.
-    return 1.30;
+    // 3. Mercado sem cobertura real (ex: Finalizações HT)
+    //    Usar minOdd como proxy para geração do bilhete
+    //    mas SEMPRE taggeado como 'estimated'
+    return { marketOdd: minOdd, minOdd, source: 'estimated' };
+    //       ↑ marketOdd = minOdd aqui — permite geração do ticket
+    //         mas source deixa claro que NÃO é odd real
   }
 
   // Infere o eixo (axis) de um mercado a partir do label (suggestCombo não retorna axis)
@@ -359,7 +375,8 @@ export class PreLiveMultipleAnalyzer {
     for (const opt of allCandidates) {
       if (!opt || !opt.label) continue;
       if (!this.isLabelAllowed(opt.label, game.league || '')) continue;
-      const bestOdd = this.getBestOdd(game, opt.label);
+      const oddResolution = this.resolveOdd(game, opt.label);
+      const bestOdd = oddResolution.marketOdd ?? 0; // 🆕 Reforma Odds
       if (!this.isOddInRange(bestOdd)) continue;
       const signature = `${game.home}_${opt.label}`;
       if (!usedSignatures.has(signature)) {
@@ -483,7 +500,9 @@ export class PreLiveMultipleAnalyzer {
 
   // Verifica se odd está na faixa operável por mercado individual (amplo o suficiente para não descartar estatísticas boas)
   private isOddInRange(odd: number | null): boolean {
-    if (!odd || odd <= 1.01) return false;
+    // 🆕 Reforma Odds: aceitar null (odd indisponível)
+    if (odd === null) return true; // Permitir mesmo sem odd real
+    if (odd <= 1.01) return false;
     if (odd > 20.00) return false; // Apenas barra odds absurdamente altas que indicam erro
     return true;
   }
@@ -614,7 +633,8 @@ export class PreLiveMultipleAnalyzer {
       const broad = this.broadAxis(axis);
       if (!isSinfonia && ticketAxes && ticketAxes.has(broad)) continue;
 
-      let bestOdd = this.getBestOdd(game, opt.label);
+      const oddResolution = this.resolveOdd(game, opt.label); // 🆕 Reforma Odds
+      let bestOdd = oddResolution.marketOdd ?? 0;
 
       // A verificação agora é hiper-flexível (1.01 a 20.00), priorizando a estatística
       if (!this.isOddInRange(bestOdd)) continue;
@@ -815,32 +835,44 @@ export class PreLiveMultipleAnalyzer {
         }
       }
 
-      return markets.map((m: any) => ({
-        match: matchName,
-        league: g?.league || "—",
-        hour: g?.hour || "—",
-        market: m.label,
-        odd: m._resolvedOdd || 0,
-        minOdd: 0,
-        hasValue: true,
-        edge: 0,
-        recommendation: "Operável",
-        oddTag: "",
-        reason: `${reason}${poisonTag}`,
-        gameProfile: profile || "generic",
-        confidence: Math.round(conf * 100),
-        _meta: { score, fav: (fav as any)?.nome || "" },
-        // 🆕 Adicionar gameStats para justificativa na UI
-        gameStats: {
-          chFavGol:   fav.chFavGol   ?? 0,
-          cantFavHT:  fav.cantFavHT  ?? 0,
-          cantFTH:    g.cantFTH     ?? 0,
-          cantFTA:    g.cantFTA     ?? 0,
-          gol05HTFav: fav.gol05HTFav ?? 0,
-          xgH:        g.xgH        ?? g.xG ?? 0,  // 🆕 Adicionar fallback xG
-          xgA:        g.xgA        ?? 0,
-        },
-      }));
+      return markets.map((m: any) => {
+        // 🆕 Reforma Odds: usar resolveOdd para obter OddsResolution
+        const oddResolution = this.resolveOdd(g, m.label);
+        const { marketOdd, minOdd, source } = oddResolution;
+        
+        // Calcular value bet apenas se tiver odd real (não estimated)
+        let valueResult = null;
+        if (source !== 'estimated' && marketOdd !== null) {
+          valueResult = calculateValueBet(g, m.label, oddResolution);
+        }
+        
+        return {
+          match: matchName,
+          league: g?.league || "—",
+          hour: g?.hour || "—",
+          market: m.label,
+          odd: marketOdd ?? 0, // 🆕 Odd real, estimada ou 0
+          minOdd, // 🆕 Odd mínima sempre presente
+          hasValue: valueResult?.hasValue ?? null,
+          edge: valueResult?.edge ?? 0,
+          recommendation: source === 'estimated' ? 'Odd estimada' : (valueResult?.recommendation ?? "Odd indisponível"),
+          oddTag: source === 'api-real' ? "🟢 API" : source === 'csv' ? "📊 CSV" : source === 'estimated' ? "~Estimada" : "⚪",
+          reason: `${reason}${poisonTag}`,
+          gameProfile: profile || "generic",
+          confidence: Math.round(conf * 100),
+          _meta: { score, fav: (fav as any)?.nome || "" },
+          // 🆕 Adicionar gameStats para justificativa na UI
+          gameStats: {
+            chFavGol:   fav.chFavGol   ?? 0,
+            cantFavHT:  fav.cantFavHT  ?? 0,
+            cantFTH:    g.cantFTH     ?? 0,
+            cantFTA:    g.cantFTA     ?? 0,
+            gol05HTFav: fav.gol05HTFav ?? 0,
+            xgH:        g.xgH        ?? g.xG ?? 0,  // 🆕 Adicionar fallback xG
+            xgA:        g.xgA        ?? 0,
+          },
+        };
+      });
     };
 
     // Pool GLOBAL por LINHA — mesma linha (jogo+mercado) não repete entre bilhetes
@@ -1483,6 +1515,14 @@ export class PreLiveMultipleAnalyzer {
       if (!hasChutes || !hasCantos) {
         console.log(`FTBOX: ${game.home} descartado — precisa de ambos (chutes+cantos)`);
         continue;
+      }
+      
+      // Avisar mas não bloquear quando odd é fixo (sem API)
+      const chutesSel = gameMarkets.find(m => m.axis === 'chutesft');
+      const cantosSel = gameMarkets.find(m => m.axis === 'cantosft');
+      if (!chutesSel?.source || chutesSel.source === 'fallback' || 
+          !cantosSel?.source || cantosSel.source === 'fallback') {
+        console.log(`FTBOX: ${game.home} usando odds fixas (sem API)`);
       }
       
       // Ordenar: cantos primeiro, depois chutes
