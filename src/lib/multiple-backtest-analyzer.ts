@@ -46,7 +46,7 @@ interface PatternAnalysis {
 
 interface MultipleSuggestion {
   id: string;
-  type: "bronze" | "silver" | "gold";
+  type: "bingoSeguro" | "bingoAlavanc";
   confidence: number;
   expectedValue: number;
   selections: Array<{
@@ -430,11 +430,10 @@ function calculateConfidence(pattern: PatternAnalysis, combinedOdd: number): num
   return Math.max(0, Math.min(1, baseConfidence + volumeBonus - oddPenalty));
 }
 
-function getMultipleType(selections: number, confidence: number): "bronze" | "silver" | "gold" {
-  if (selections === 2 && confidence >= 0.85) return "bronze";
-  if (selections === 3 && confidence >= 0.75) return "silver";
-  if (selections >= 4 && confidence >= 0.65) return "gold";
-  return "bronze";
+function getMultipleType(selections: number, confidence: number): "bingoSeguro" | "bingoAlavanc" {
+  // 🆕 Nova classificação para bilhetes Bingo
+  if (selections <= 4 && confidence >= 0.75) return "bingoSeguro";
+  return "bingoAlavanc";
 }
 
 function calculateExpectedValue(successRate: number, combinedOdd: number): number {
@@ -442,8 +441,8 @@ function calculateExpectedValue(successRate: number, combinedOdd: number): numbe
   return (winProbability * combinedOdd) - 1;
 }
 
-function calculateStake(confidence: number, type: "bronze" | "silver" | "gold"): number {
-  const baseStake = type === "bronze" ? 3 : type === "silver" ? 2 : 1.5;
+function calculateStake(confidence: number, type: "bingoSeguro" | "bingoAlavanc"): number {
+  const baseStake = type === "bingoSeguro" ? 3 : 1.5; // 🆕 Novos stakes para Bingo
   return Math.max(0.5, baseStake * confidence);
 }
 

@@ -118,11 +118,20 @@ async function apiFetch(path: string, apiKey: string, attempt = 0): Promise<any>
 
   // Handle rate limit: retry up to 3 times with exponential backoff
   const rateErr = data.errors?.rateLimit ?? data.errors?.requests;
-  if (rateErr && attempt < 3) {
-    const wait = (attempt + 1) * 8000; // 8s, 16s, 24s
-    console.warn(`[API-Football] rate limit on ${path}, retrying in ${wait / 1000}s (attempt ${attempt + 1})`);
-    await sleep(wait);
-    return apiFetch(path, apiKey, attempt + 1);
+  if (rateErr) {
+    // 🆕 Abort imediato para cota diária esgotada (sem retentativas)
+    if (typeof rateErr === 'string' && rateErr.includes("request limit for the day")) {
+      console.log(`[API-Football] COTA_DIARIA_ESGOTADA detectada - abortando sem retentativas`);
+      throw new Error("COTA_DIARIA_ESGOTADA");
+    }
+    
+    // Retry só para rate limit por minuto (recoverable)
+    if (attempt < 3) {
+      const wait = (attempt + 1) * 8000; // 8s, 16s, 24s
+      console.warn(`[API-Football] rate limit (minute) on ${path}, retrying in ${wait / 1000}s (attempt ${attempt + 1})`);
+      await sleep(wait);
+      return apiFetch(path, apiKey, attempt + 1);
+    }
   }
 
   if (data.errors && Object.keys(data.errors).length > 0 && !rateErr) {
@@ -649,21 +658,28 @@ export async function fetchOddsForCsvGames(
               if (bet.id === 5 && label.startsWith("Over")) {
                 // 🆕 Goals markets (bet5) - Reforma Odds
                 markets[`Over ${label.replace("Over ", "")} FT`] = odd;
+                // 🆕 Armazenar bet_id para validação
+                markets[`__bet_id__Over ${label.replace("Over ", "")} FT`] = bet.id;
               }
               if (bet.id === 26 && label.startsWith("Over")) {
                 markets[`Over ${label.replace("Over ", "")} Gols HT`] = odd;
+                markets[`__bet_id__Over ${label.replace("Over ", "")} Gols HT`] = bet.id;
               }
               if (bet.id === 28 && label === "Yes") {
                 markets["Ambas Marcam — Sim"] = odd;
+                markets["__bet_id__Ambas Marcam — Sim"] = bet.id;
               }
               if (bet.id === 45 && label.startsWith("Over")) {
                 markets[`Over ${label.replace("Over ", "")} Cantos FT`] = odd;
+                markets[`__bet_id__Over ${label.replace("Over ", "")} Cantos FT`] = bet.id;
               }
               if (bet.id === 64 && label.startsWith("Over")) {
                 markets[`${match.apiHomeTeam} Finalizações Over ${label.replace("Over ", "")}`] = odd;
+                markets[`__bet_id__${match.apiHomeTeam} Finalizações Over ${label.replace("Over ", "")}`] = bet.id;
               }
               if (bet.id === 65 && label.startsWith("Over")) {
                 markets[`${match.apiAwayTeam} Finalizações Over ${label.replace("Over ", "")}`] = odd;
+                markets[`__bet_id__${match.apiAwayTeam} Finalizações Over ${label.replace("Over ", "")}`] = bet.id;
               }
             }
           }
@@ -675,6 +691,9 @@ export async function fetchOddsForCsvGames(
         bookmaker: "Bet365",
         markets,
       };
+      
+      // 🆕 Log de diagnóstico para verificar quais mercados chegaram da API
+      console.log(`[ODDS-MARKETS] ${match.apiHomeTeam} x ${match.apiAwayTeam}:`, Object.keys(markets));
     }
   }
 

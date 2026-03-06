@@ -14,5 +14,5 @@ export interface OddsResolution {
   minOdd: number
 
   // Source: de onde veio a odd real
-  source: 'csv' | 'api-real' | 'estimated' | null
+  source: 'csv' | 'api-real' | 'estimated' | 'api-rejected' | 'csv-rejected' | 'estimated-rejected' | null
 }

@@ -6,7 +6,7 @@ import { NavHeader } from "../../components/NavHeader";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { useBacktest, STAKE_FIXA } from "../../hooks/useBacktest";
 import { C, KPI as KpiCard, EmptyState, mktCat as catLabel } from "../../components/ui";
-import { PreLiveMultipleAnalyzer } from "../../lib/pre-live-multiple-analyzer";
+import { PreLiveMultipleAnalyzer, analyzeLiveMultiplesAsync } from "../../lib/pre-live-multiple-analyzer";
 
 type Period = 7 | 30 | 90;
 
@@ -376,7 +376,7 @@ function getSynergyLabel(profiles: string[]): string {
 
 // ── COMPONENTE DO CARD DA MÚLTIPLA ───────────────────────────────
 function MultipleCard({ s }: { s: any }) {
-  const style = TICKET_STYLES[s.type] ?? TICKET_STYLES.bronze
+  const style = TICKET_STYLES[s.type] ?? TICKET_STYLES.bingoSeguro
   const groups = Object.values(groupByGame(s.selections))
   const combinedOdd = s.combinedOdd ?? 0
   const nLegs = s.selections?.length ?? 0
@@ -798,13 +798,13 @@ function FTBoxBuilder({ ftBoxCandidates, ftBoxSelections, setFtBoxSelections, li
 }
 
 const TICKET_STYLES: Record<string, { label: string; color: string; icon: string }> = {
-  bronze:    { label: 'Seguro',    color: '#58a6ff', icon: '🛡️' },
-  silver:    { label: 'Padrão',    color: '#c0c0c0', icon: '⚖️' },
-  gold:      { label: 'Forte',     color: '#ffd700', icon: '💪' },
-  agressivo: { label: 'Agressivo', color: '#ff6b00', icon: '🚀' },
-  bingo:     { label: 'Bingo',     color: '#ff1744', icon: '💣' },
-  sinfonia:  { label: 'Sinfonia',  color: '#00e676', icon: '🐦' },
-  ftbox:     { label: 'Box FT',    color: '#ff9800', icon: '🔥' },
+  // 🆕 Novos bilhetes Bingo (substituem clássicos)
+  bingoSeguro:  { label: 'Bingo Seguro',  color: '#58a6ff', icon: '🎯' },
+  bingoAlavanc: { label: 'Bingo Alavanc', color: '#ff1744', icon: '�' },
+  // Manter: Sinfonia e FT Box
+  sinfonia:    { label: 'Sinfonia',     color: '#00e676', icon: '🐦' },
+  ftbox:       { label: 'Box FT',      color: '#ff9800', icon: '🔥' },
+  // Removidos: bronze, silver, gold, agressivo, bingo
 };
 
 export default function MultipleAnalyzerPage() {
@@ -907,7 +907,31 @@ export default function MultipleAnalyzerPage() {
     setAnalyzing(true);
     setError('');
     try {
-      const result = await analyzer.analyzeLiveMultiples(text, undefined, undefined, ignoredMatches);
+      // 🆕 1. Buscar odds antes de chamar o analyzer
+      const today = new Date().toISOString().split('T')[0];
+      let oddsMap: Record<number, any> = {};
+      let fixtureMap: Record<string, number> = {};
+
+      try {
+        const oddsRes = await fetch('/api/football-odds', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ csvText: text, date: today }),
+        });
+        if (oddsRes.ok) {
+          const oddsData = await oddsRes.json();
+          oddsMap = oddsData.oddsMap ?? {};
+          fixtureMap = oddsData.fixtureMap ?? {};
+          console.log('[MULTIPLE-ANALYZER] oddsMap injetado:', Object.keys(oddsMap).length, 'fixtures');
+        }
+      } catch (e) {
+        console.warn('[MULTIPLE-ANALYZER] Falha ao buscar odds, usando fallback:', e);
+        // Continua sem odds reais — não bloqueia a análise
+      }
+
+      // 🆕 2. Substituir chamada com oddsMap/fixtureMap
+      const result = await analyzeLiveMultiplesAsync(text, oddsMap, fixtureMap, ignoredMatches);
+      
       setSuggestions(result.suggestions ?? []);
       setSummary(result.summary);
       // 🆕 Guardar ftBoxCandidates para o construtor manual
@@ -1114,7 +1138,7 @@ export default function MultipleAnalyzerPage() {
       // Re-analisar com odds injetadas
       if (result.oddsMap && result.fixtureMap) {
         analyzer.injectRealOdds(result.oddsMap, result.fixtureMap);
-        const enriched = await analyzer.analyzeLiveMultiples(csvText, result.oddsMap, result.fixtureMap, ignoredMatches);
+        const enriched = await analyzeLiveMultiplesAsync(csvText, result.oddsMap, result.fixtureMap, ignoredMatches);
         setSuggestions(enriched.suggestions);
       }
 
@@ -1133,7 +1157,7 @@ export default function MultipleAnalyzerPage() {
     const text = csvText.trim();
     if (!text) return;
     try {
-      const result = await analyzer.analyzeLiveMultiples(text, undefined, undefined, updated);
+      const result = await analyzeLiveMultiplesAsync(text, undefined, undefined, updated);
       setSuggestions(result.suggestions ?? []);
       setSummary(result.summary);
     } catch (e) {
@@ -1158,7 +1182,7 @@ export default function MultipleAnalyzerPage() {
     const text = csvText.trim();
     if (!text) return;
     try {
-      const result = await analyzer.analyzeLiveMultiples(text);
+      const result = await analyzeLiveMultiplesAsync(text);
       setSuggestions(result.suggestions ?? []);
       setSummary(result.summary);
     } catch (e) {

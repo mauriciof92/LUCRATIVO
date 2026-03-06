@@ -340,11 +340,13 @@ export function getOddForLabel(g, label) {
   if (nl.includes("finalizac") || nl.includes("chute")) return null;
   if ((nl.includes("canto") || nl.includes("escanteio")) && nl.includes("ht")) return null;
   if ((nl.includes("canto") || nl.includes("escanteio")) && (nl.includes("over 3.5") || nl.includes("over 4.5") || nl.includes("over 5.5") || nl.includes("over 6.5") || nl.includes("over 7.5") || nl.includes("over 9.5"))) return null;
+  
+  // 🆕 BLOQUEAR Over 1.5/2.5 FT do CSV - apenas API real permitida
+  if (nl.includes("over 1.5") || nl.includes("over 2.5")) return null;
 
   const wantTokens = [];
   if (nl.includes("over 0.5") && nl.includes("ht")) wantTokens.push("mais de 0.5 gols 1° tempo");
-  else if (nl.includes("over 1.5")) wantTokens.push("mais de 1.5 gols");
-  else if (nl.includes("over 2.5")) wantTokens.push("mais de 2.5 gols");
+  // 🆕 Over 1.5/2.5 FT removidos - apenas API real permitida
   else if (nl.includes("ambas marcam")) wantTokens.push("ambas as equipes marcarem (sim)");
   else if (nl.includes("cantos") && nl.includes("ht")) wantTokens.push("mais de 4 escanteios 1° tempo");
   else if (nl.includes("cantos")) wantTokens.push("mais de 8.5 escanteios");
@@ -368,12 +370,10 @@ export function getOddForLabel(g, label) {
     let s = 0;
     if (/(^|\b)(odd|odds|cota|cotacao)(\b|$)/.test(nk)) s += 1;
     for (const t of wantTokens) if (nk.includes(t)) s += 3;
-    // FALLBACK SEGURO: só para os 8 mercados reais
+    // FALLBACK SEGURO: só para os 6 mercados reais (Over 1.5/2.5 removidos)
     if (wantTokens.length === 0 && nl && nk.includes(nl)) {
-      // Verificar se é um dos 8 mercados permitidos
+      // Verificar se é um dos 6 mercados permitidos
       const allowedMarkets = [
-        "mais de 1.5 gols",
-        "mais de 2.5 gols", 
         "ambas as equipes marcarem (sim)",
         "mais de 0.5 gols 1° tempo",
         "mais de 8.5 escanteios",

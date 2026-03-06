@@ -33,15 +33,14 @@ const MIN_GAME_ODD = 1.20;    // Odd mínima por jogo (produto dos mercados do j
 const MAX_GAME_ODD = 15.00;   // Odd máxima por jogo (aumentada para permitir Sinfonia com 3 mercados)
 
 // Tiers baseados em número de JOGOS (cada jogo = 1 mercado tradicional nas clássicas)
-// minGames = mínimo de jogos exigido para o bilhete ser gerado
+// nGames = jogos desejados, minGames = mínimo de jogos exigido para o bilhete ser gerado
 const TIER_CONFIG: Record<string, { nGames: number; minGames: number; marketsPerGame: number; stake: number; minTotal: number; maxTotal: number }> = {
-  bronze:    { nGames: 2, minGames: 2, marketsPerGame: 1, stake: 50, minTotal: 1.5,  maxTotal: 5.0  },
-  silver:    { nGames: 3, minGames: 2, marketsPerGame: 1, stake: 35, minTotal: 2.0,  maxTotal: 10.0 },
-  gold:      { nGames: 4, minGames: 3, marketsPerGame: 1, stake: 25, minTotal: 3.0,  maxTotal: 15.0 },
-  agressivo: { nGames: 6, minGames: 3, marketsPerGame: 1, stake: 15, minTotal: 4.0,  maxTotal: 40.0 }, // ← minGames reduzido de 5 para 3
-  bingo:     { nGames: 8, minGames: 4, marketsPerGame: 1, stake: 10, minTotal: 5.0,  maxTotal: 80.0 }, // ← minGames reduzido de 6 para 4
-  sinfonia:  { nGames: 1, minGames: 1, marketsPerGame: 6, stake: 20, minTotal: 0, maxTotal: 0 }, // 🆕 Sinfonia: sem cap de jogos, cap dinâmico por qualidade
-  ftbox:     { nGames: 3, minGames: 2, marketsPerGame: 2, stake: 25, minTotal: 2.0,  maxTotal: 15.0 }, // 🆕 FT Box: foco em mercados FT de time
+  // Novos bilhetes Bingo (substituem bronze/silver/gold/agressivo/bingo)
+  bingoSeguro:   { nGames: 4, minGames: 3, marketsPerGame: 1, stake: 30, minTotal: 15.0, maxTotal: 30.0 },
+  bingoAlavanc:  { nGames: 8, minGames: 3, marketsPerGame: 2, stake: 15, minTotal: 50.0, maxTotal: 200.0 }, // Ampliado: 8 seleções, até 2 mercados por jogo
+  // Manter: Sinfonia e FT Box
+  sinfonia:  { nGames: 1, minGames: 1, marketsPerGame: 6, stake: 20, minTotal: 0, maxTotal: 0 }, // Sinfonia: sem cap de jogos, cap dinâmico por qualidade
+  ftbox:     { nGames: 3, minGames: 2, marketsPerGame: 2, stake: 25, minTotal: 2.0,  maxTotal: 15.0 }, // FT Box: foco em mercados FT de time
 };
 // Qualidade mínima por jogo (gate de entrada) - REDUZIDO TEMPORARIAMENTE
 const MIN_SCORE = 0.45;  // Score ≥ 45% (era 55%)
@@ -49,7 +48,7 @@ const MIN_CONF  = 0.35;  // Confiança ≥ 35% (era 45%)
 
 export interface LiveMultipleSuggestion {
   id: string;
-  type: "bronze" | "silver" | "gold" | "agressivo" | "bingo" | "sinfonia" | "ftbox";
+  type: "bingoSeguro" | "bingoAlavanc" | "sinfonia" | "ftbox";
   confidence: number;
   expectedValue: number;
   riskLevel: "low" | "medium" | "high";
@@ -244,6 +243,15 @@ export class PreLiveMultipleAnalyzer {
     if (realMarkets) {
       // Busca exata
       if (realMarkets[marketLabel]) {
+        // Validar bet_id para mercados de gols
+        if (marketLabel.includes("gols FT") && realMarkets[`__bet_id__${marketLabel}`]) {
+          const betId = realMarkets[`__bet_id__${marketLabel}`];
+          if (betId !== 5) {
+            console.log(`[BINGO] Mercado errado descartado: Team Goals (bet_id=${betId}) ≠ Total Goals (bet_id=5) para ${marketLabel}`);
+            return { marketOdd: null, minOdd, source: 'api-rejected' };
+          }
+        }
+        
         return { marketOdd: realMarkets[marketLabel], minOdd, source: 'api-real' };
       }
       
@@ -254,15 +262,33 @@ export class PreLiveMultipleAnalyzer {
         const lineMatch = nl.match(/over\s+(\d+\.\d+)/);
         if (lineMatch && nk.includes(`over ${lineMatch[1]}`)) {
           if (nl.includes('finaliz') && nk.includes('finaliz')) {
+            // Validar bet_id para mercados de gols fuzzy também
+            const betIdKey = `__bet_id__${key}`;
+            if (realMarkets[betIdKey] && realMarkets[betIdKey] !== 5) {
+              console.log(`[BINGO] Mercado errado descartado (fuzzy): Team Goals (bet_id=${realMarkets[betIdKey]}) ≠ Total Goals (bet_id=5) para ${key}`);
+              continue;
+            }
             return { marketOdd: odd, minOdd, source: 'api-real' };
           }
           if (nl.includes('canto') && nk.includes('canto')) {
             return { marketOdd: odd, minOdd, source: 'api-real' };
           }
           if (nl.includes('gol') && nk.includes('gol')) {
+            // Validar bet_id para mercados de gols fuzzy também
+            const betIdKey = `__bet_id__${key}`;
+            if (realMarkets[betIdKey] && realMarkets[betIdKey] !== 5) {
+              console.log(`[BINGO] Mercado errado descartado (fuzzy): Team Goals (bet_id=${realMarkets[betIdKey]}) ≠ Total Goals (bet_id=5) para ${key}`);
+              continue;
+            }
             return { marketOdd: odd, minOdd, source: 'api-real' };
           }
           if (nl.includes('ft') && nk.includes('ft') && !nl.includes('canto')) {
+            // Validar bet_id para FT fuzzy também
+            const betIdKey = `__bet_id__${key}`;
+            if (realMarkets[betIdKey] && realMarkets[betIdKey] !== 5) {
+              console.log(`[BINGO] Mercado errado descartado (fuzzy FT): Team Goals (bet_id=${realMarkets[betIdKey]}) ≠ Total Goals (bet_id=5) para ${key}`);
+              continue;
+            }
             return { marketOdd: odd, minOdd, source: 'api-real' };
           }
         }
@@ -278,10 +304,21 @@ export class PreLiveMultipleAnalyzer {
     // 2. Tentar CSV
     const csvOdd = getOddForLabel(game, marketLabel);
     if (typeof csvOdd === 'number' && !isNaN(csvOdd) && csvOdd > 1.01) {
+      // 🆕 Para mercados de volume de gols (Over 1.5/2.5 FT), não usar CSV - apenas API real
+      if (marketLabel.includes("gols FT") && (marketLabel.includes("Over 1.5") || marketLabel.includes("Over 2.5"))) {
+        console.log(`[BINGO] Mercado de gols FT sem API real descartado: ${marketLabel} (CSV=${csvOdd}) - apenas API real permitida`);
+        return { marketOdd: null, minOdd, source: 'csv-rejected' };
+      }
       return { marketOdd: csvOdd, minOdd, source: 'csv' };
     }
 
     // 3. Mercado sem cobertura real (ex: Finalizações HT)
+    //    Para mercados de volume de gols FT, não usar fallback estimado
+    if (marketLabel.includes("gols FT") && (marketLabel.includes("Over 1.5") || marketLabel.includes("Over 2.5"))) {
+      console.log(`[BINGO] Mercado de gols FT sem cobertura - descartado: ${marketLabel} - não usar fallback estimado`);
+      return { marketOdd: null, minOdd, source: 'estimated-rejected' };
+    }
+    
     //    Usar minOdd como proxy para geração do bilhete
     //    mas SEMPRE taggeado como 'estimated'
     return { marketOdd: minOdd, minOdd, source: 'estimated' };
@@ -673,9 +710,52 @@ export class PreLiveMultipleAnalyzer {
       
       const upcomingGames = games.filter(g => {
         if (g.status && g.status !== 'NS') return false;
+        
         // Verificar se o jogo é da data selecionada (evitar jogos NS de dias anteriores no CSV acumulado)
         const gameDateDDMM = extractDateFromHour(g.hour);
-        return gameDateDDMM === targetDDMM;
+        if (gameDateDDMM !== targetDDMM) return false;
+        
+        // 🆕 Verificar se o horário do jogo ainda não passou
+        const now = new Date();
+        const currentHour = now.getHours();
+        const currentMinute = now.getMinutes();
+        const currentTimeInMinutes = currentHour * 60 + currentMinute;
+        
+        // Extrair horário do jogo (formatos: "25/02 15:00", "15:00", "2026-02-25 15:00")
+        const gameHourStr = String(g.hour || '').trim();
+        let gameHour = -1;
+        let gameMinute = -1;
+        
+        // Tentar diferentes formatos de horário
+        const timeMatch = gameHourStr.match(/(\d{1,2}):(\d{2})(?:\s*(?:AM|PM))?$/i);
+        if (timeMatch) {
+          gameHour = parseInt(timeMatch[1]);
+          gameMinute = parseInt(timeMatch[2]);
+          
+          // Ajustar para formato 24h se tiver AM/PM
+          const ampm = timeMatch[3]?.toUpperCase();
+          if (ampm === 'PM' && gameHour < 12) gameHour += 12;
+          if (ampm === 'AM' && gameHour === 12) gameHour = 0;
+        }
+        
+        // Se não conseguiu extrair horário, incluir por segurança (não barrar)
+        if (gameHour === -1 || gameMinute === -1) {
+          console.log(`[HORARIO] Horário não reconhecido para ${g.match}: "${gameHourStr}" - incluindo por segurança`);
+          return true;
+        }
+        
+        const gameTimeInMinutes = gameHour * 60 + gameMinute;
+        
+        // 🆕 Verificar se o jogo ainda não começou (margem de segurança de 5 minutos)
+        const gameStarted = gameTimeInMinutes <= currentTimeInMinutes - 5;
+        
+        if (gameStarted) {
+          console.log(`[HORARIO] Jogo já começou - descartado: ${g.match} (${gameHourStr} vs agora ${currentHour}:${currentMinute.toString().padStart(2, '0')})`);
+          return false;
+        }
+        
+        console.log(`[HORARIO] Jogo válido - futuro: ${g.match} (${gameHourStr} vs agora ${currentHour}:${currentMinute.toString().padStart(2, '0')})`);
+        return true;
       });
       console.log(`🎯 ${upcomingGames.length} jogos NS de ${selectedDate ? `data ${selectedDate}` : 'hoje'} disponíveis para análise pré-live`);
 
@@ -749,6 +829,263 @@ export class PreLiveMultipleAnalyzer {
         games: [] // 🆕 Adicionar games vazios no erro
       };
     }
+  }
+
+  // 🆕 Bingo Seguro: Top 3-4 jogos por score com maior edge real
+  private async buildBingoSeguro(games: any[]): Promise<LiveMultipleSuggestion | null> {
+    console.log('[BINGO-SEGURO] Construindo bilhete seguro com edge real...');
+    
+    // Mercados permitidos para o Bingo Seguro
+    const allowedMarkets = [
+      "Ambas Marcam — Sim",
+      "Mais de 2.5 gols FT",
+      "Mais de 1.5 gols FT", 
+      "Mais de 8.5 escanteios FT",
+      "Mais de 9.5 escanteios FT",
+      "Mais de 10.5 escanteios FT",
+      "Mais de 0.5 gols 1T"
+    ];
+
+    // Top 3-4 jogos por score
+    const topGames = games
+      .sort((a, b) => {
+        const scoreA = typeof computeScore(a) === 'number' ? computeScore(a) : (computeScore(a) as any)?.score || 0;
+        const scoreB = typeof computeScore(b) === 'number' ? computeScore(b) : (computeScore(b) as any)?.score || 0;
+        return scoreB - scoreA;
+      })
+      .slice(0, 4);
+
+    console.log(`[BINGO-SEGURO] ${topGames.length} jogos candidatos`);
+
+    const selections: any[] = [];
+    const usedGames = new Set<string>();
+
+    for (const g of topGames) {
+      if (selections.length >= 4) break;
+      if (usedGames.has(g.match)) continue;
+
+      // Encontrar mercado com maior edge real entre os permitidos
+      let bestMarket = null;
+      let bestEdge = -Infinity;
+      let bestSelection = null;
+
+      for (const market of allowedMarkets) {
+        const resolution = this.resolveOdd(g, market);
+        if (resolution.marketOdd && resolution.marketOdd >= 1.80) {
+          // 🆕 Proteção contra odds anormais
+          if (resolution.marketOdd < 1.35 || resolution.marketOdd > 4.00) {
+            console.log(`[BINGO-SEGURO] Seleção descartada — odd fora do range operável: ${resolution.marketOdd}`);
+            continue;
+          }
+          
+          // 🆕 Proteção adicional para mercados tradicionais
+          const traditionalMarkets = ["Ambas Marcam — Sim", "Mais de 2.5 gols FT", "Mais de 1.5 gols FT", "Casa para vencer", "Visitante para vencer"];
+          if (traditionalMarkets.includes(market) && resolution.marketOdd > 4.00) {
+            console.log(`[BINGO-SEGURO] Descartado — odd improvável para mercado simples: ${market} @ ${resolution.marketOdd}`);
+            continue;
+          }
+          
+          const valueResult = calculateValueBet(g, market, resolution);
+          if (valueResult && valueResult.edge !== null && valueResult.edge > 0) {
+            if (valueResult.edge > bestEdge) {
+              bestEdge = valueResult.edge;
+              bestMarket = market;
+              bestSelection = {
+                match: g.match,
+                league: g.league || "—",
+                hour: g.hour || "—",
+                market: market,
+                odd: resolution.marketOdd,
+                minOdd: resolution.minOdd,
+                hasValue: valueResult.hasValue,
+                edge: valueResult.edge,
+                recommendation: valueResult.recommendation,
+                reason: `Edge ${valueResult.edge}% · ${valueResult.recommendation}`,
+                gameProfile: classifyProfile(g) || "generic",
+                confidence: Math.round((computeConfidence(g)?.score || 0) * 100),
+                oddTag: resolution.source === 'api-real' ? "🟢 API" : resolution.source === 'csv' ? "📊 CSV" : "~Estimada",
+              };
+            }
+          }
+        }
+      }
+
+      if (bestSelection) {
+        selections.push(bestSelection);
+        usedGames.add(g.match);
+        console.log(`[BINGO-SEGURO] ✅ ${g.match}: ${bestMarket} @ ${bestSelection.odd} (edge ${bestEdge}%)`);
+      }
+    }
+
+    if (selections.length < 3) {
+      console.log(`[BINGO-SEGURO] ❌ Apenas ${selections.length} mercados com edge ≥ 1.80 - bilhete não gerado`);
+      return null;
+    }
+
+    // Calcular odd total e métricas
+    const combinedOdd = selections.reduce((acc, s) => acc * s.odd, 1);
+    const stake = 30;
+    const expectedReturn = combinedOdd * stake;
+    const avgEdge = selections.reduce((acc, s) => acc + (s.edge / 100), 0) / selections.length;
+
+    console.log(`[BINGO-SEGURO] ✅ ${selections.length} seleções | odd=${combinedOdd.toFixed(2)} | edge médio=${(avgEdge * 100).toFixed(1)}%`);
+
+    return {
+      id: `bingo-seguro-${Date.now()}`,
+      type: 'bingoSeguro',
+      confidence: selections.reduce((acc, s) => acc + s.confidence, 0) / selections.length,
+      expectedValue: avgEdge,
+      riskLevel: 'low',
+      selections,
+      combinedOdd: parseFloat(combinedOdd.toFixed(2)),
+      suggestedStake: stake,
+      expectedReturn: parseFloat(expectedReturn.toFixed(2)),
+      riskReward: combinedOdd <= 25 ? 'Excelente' : combinedOdd <= 30 ? 'Bom' : 'Moderado',
+    };
+  }
+
+  // 🆕 Bingo Alavancagem: Top jogos Poison com múltiplos mercados e edge positivo
+  private async buildBingoAlavanc(games: any[]): Promise<LiveMultipleSuggestion | null> {
+    console.log('[BINGO-ALAVANC] Construindo bilhete de alavancagem com jogos Poison e múltiplos mercados...');
+
+    // Filtrar apenas jogos Poison - ampliado para mais jogos
+    const poisonGames = games.filter(g => detectPoisonTriggers(g).isPoison);
+    
+    // Top 8 jogos Poison por score (aumentado de 5 para 8)
+    const topPoisonGames = poisonGames
+      .sort((a, b) => {
+        const scoreA = typeof computeScore(a) === 'number' ? computeScore(a) : (computeScore(a) as any)?.score || 0;
+        const scoreB = typeof computeScore(b) === 'number' ? computeScore(b) : (computeScore(b) as any)?.score || 0;
+        return scoreB - scoreA;
+      })
+      .slice(0, 8);
+
+    console.log(`[BINGO-ALAVANC] ${topPoisonGames.length} jogos Poison encontrados (top 8)`);
+
+    const selections: any[] = [];
+    const usedGames = new Set<string>();
+    const gameMarketCount = new Map<string, number>(); // Controlar mercados por jogo
+
+    // 🆕 Permitir até 2 mercados por jogo (aumentado de 1)
+    const MAX_MARKETS_PER_GAME = 2;
+    const MAX_SELECTIONS = 8; // Aumentado de 5 para 8 seleções
+
+    // Processar todos os jogos Poison
+    for (const g of topPoisonGames) {
+      if (selections.length >= MAX_SELECTIONS) break;
+      
+      const currentGameMarkets = gameMarketCount.get(g.match) || 0;
+      if (currentGameMarkets >= MAX_MARKETS_PER_GAME) {
+        console.log(`[BINGO-ALAVANC] Jogo ${g.match} já atingiu limite de ${MAX_MARKETS_PER_GAME} mercados`);
+        continue;
+      }
+
+      console.log(`[BINGO-ALAVANC] Analisando jogo ${g.match} (${currentGameMarkets + 1}/${MAX_MARKETS_PER_GAME} mercados)`);
+
+      // 🆕 Encontrar TODOS os mercados com edge positivo (não apenas o de maior odd)
+      const validMarkets = [];
+      const allMarkets = [
+        "Ambas Marcam — Sim",
+        "Mais de 2.5 gols FT",
+        "Mais de 1.5 gols FT",
+        "Mais de 0.5 gols 1T",
+        "Casa para vencer",
+        "Visitante para vencer",
+        "Mais de 8.5 escanteios FT",
+        "Mais de 9.5 escanteios FT",
+        "Mais de 10.5 escanteios FT",
+      ];
+
+      for (const market of allMarkets) {
+        const resolution = this.resolveOdd(g, market);
+        if (resolution.marketOdd) {
+          // 🆕 Proteção contra odds anormais
+          if (resolution.marketOdd < 1.35 || resolution.marketOdd > 4.00) {
+            console.log(`[BINGO-ALAVANC] Seleção descartada — odd fora do range operável: ${resolution.marketOdd}`);
+            continue;
+          }
+          
+          // 🆕 Proteção adicional para mercados tradicionais
+          const traditionalMarkets = ["Ambas Marcam — Sim", "Mais de 2.5 gols FT", "Mais de 1.5 gols FT", "Casa para vencer", "Visitante para vencer"];
+          if (traditionalMarkets.includes(market) && resolution.marketOdd > 4.00) {
+            console.log(`[BINGO-ALAVANC] Descartado — odd improvável para mercado simples: ${market} @ ${resolution.marketOdd}`);
+            continue;
+          }
+          
+          const valueResult = calculateValueBet(g, market, resolution);
+          if (valueResult && valueResult.edge !== null && valueResult.edge > 0) {
+            validMarkets.push({
+              market,
+              odd: resolution.marketOdd,
+              edge: valueResult.edge,
+              resolution,
+              valueResult
+            });
+          }
+        }
+      }
+
+      // 🆕 Ordenar por odd (maior primeiro) para maximizar alavancagem
+      validMarkets.sort((a, b) => b.odd - a.odd);
+
+      // 🆕 Adicionar até 2 melhores mercados por jogo
+      const marketsToAdd = Math.min(2, validMarkets.length, MAX_MARKETS_PER_GAME - currentGameMarkets);
+      for (let i = 0; i < marketsToAdd; i++) {
+        if (selections.length >= MAX_SELECTIONS) break;
+        
+        const bestMarket = validMarkets[i];
+        const poison = detectPoisonTriggers(g);
+        
+        const selection = {
+          match: g.match,
+          league: g.league || "—",
+          hour: g.hour || "—",
+          market: bestMarket.market,
+          odd: bestMarket.odd,
+          minOdd: bestMarket.resolution.minOdd,
+          hasValue: bestMarket.valueResult.hasValue,
+          edge: bestMarket.edge,
+          recommendation: bestMarket.valueResult.recommendation,
+          reason: `Poison Trigger · Edge ${bestMarket.edge}% · ${bestMarket.valueResult.recommendation}`,
+          gameProfile: classifyProfile(g) || "generic",
+          confidence: Math.round((computeConfidence(g)?.score || 0) * 100),
+          oddTag: bestMarket.resolution.source === 'api-real' ? "🟢 API" : bestMarket.resolution.source === 'csv' ? "📊 CSV" : "~Estimada",
+        };
+
+        selections.push(selection);
+        gameMarketCount.set(g.match, currentGameMarkets + i + 1);
+        
+        console.log(`[BINGO-ALAVANC] ✅ ${g.match}: ${bestMarket.market} @ ${bestMarket.odd} (${poison.primaryTrigger?.icon} ${poison.primaryTrigger?.tag})`);
+      }
+
+      usedGames.add(g.match);
+    }
+
+    if (selections.length < 3) {
+      console.log(`[BINGO-ALAVANC] ❌ Apenas ${selections.length} mercados Poison com edge positivo - bilhete não gerado`);
+      return null;
+    }
+
+    // Calcular odd total e métricas
+    const combinedOdd = selections.reduce((acc, s) => acc * s.odd, 1);
+    const stake = 15;
+    const expectedReturn = combinedOdd * stake;
+    const avgEdge = selections.reduce((acc, s) => acc + (s.edge / 100), 0) / selections.length;
+
+    console.log(`[BINGO-ALAVANC] ✅ ${selections.length} seleções | odd=${combinedOdd.toFixed(2)} | edge médio=${(avgEdge * 100).toFixed(1)}%`);
+
+    return {
+      id: `bingo-alavanc-${Date.now()}`,
+      type: 'bingoAlavanc',
+      confidence: selections.reduce((acc, s) => acc + s.confidence, 0) / selections.length,
+      expectedValue: avgEdge,
+      riskLevel: 'high',
+      selections,
+      combinedOdd: parseFloat(combinedOdd.toFixed(2)),
+      suggestedStake: stake,
+      expectedReturn: parseFloat(expectedReturn.toFixed(2)),
+      riskReward: combinedOdd <= 50 ? 'Alta' : combinedOdd <= 100 ? 'Muito Alta' : 'Extrema',
+    };
   }
 
   private async generateQualityMultiples(games: any[]): Promise<LiveMultipleSuggestion[]> {
@@ -1059,21 +1396,12 @@ export class PreLiveMultipleAnalyzer {
       suggestions.push(sinfoniaCard)
     }
 
-    // 2️⃣ Múltiplas Clássicas (1 mercado por jogo) geradas na sequência
-    const seguro = buildSGPTicket('bronze', 'low', '🛡️ Seguro');
-    if (seguro) suggestions.push(seguro);
+    // 2️⃣ 🆕 Novos Bilhetes Bingo (substituem clássicos)
+    const bingoSeguro = await this.buildBingoSeguro(topGames);
+    if (bingoSeguro) suggestions.push(bingoSeguro);
 
-    const padrao = buildSGPTicket('silver', 'low', '⚖️ Padrão');
-    if (padrao) suggestions.push(padrao);
-
-    const forte = buildSGPTicket('gold', 'medium', '💪 Forte');
-    if (forte) suggestions.push(forte);
-
-    const agressivo = buildSGPTicket('agressivo', 'medium', '🚀 Agressivo');
-    if (agressivo) suggestions.push(agressivo);
-
-    const bingo = buildSGPTicket('bingo', 'high', '💣 Bingo');
-    if (bingo) suggestions.push(bingo);
+    const bingoAlavanc = await this.buildBingoAlavanc(topGames);
+    if (bingoAlavanc) suggestions.push(bingoAlavanc);
 
     // 🆕 3️⃣ Box FT Dominância gerado por último
     const ftBox = await this.buildFTBox(topGames);

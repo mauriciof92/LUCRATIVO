@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { runBacktest, processNSGames, enrichWithRealStats, validateWithManualInput, resolveMarketResult, type BetResult } from "../lib/backtest";
 import { loadStoredBacktest, saveStoredBacktest, type StoredBacktest } from "../lib/storage";
-import { fetchRealStatsForMatches, fetchFixtureStatistics } from "../lib/footballApi";
+import { fetchFixtureStatistics } from "../lib/footballApi";
 import { parseCSV, extractDateFromHour } from "../engine";
 import { supabase, supabaseConfigured } from "../lib/supabase";
 import { generateDeterministicId } from "../lib/utils";

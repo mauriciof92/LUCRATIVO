@@ -352,13 +352,45 @@ export default function PanoramaPage() {
     setProcessingNs(true);
     (async () => {
       try {
-        console.log('[PANORAMA] Processando jogos NS para Cantos FT...');
-        const analysis = await analyzeLiveMultiplesAsync(lastCsvText, undefined, undefined, [], selectedDDMM);
+        console.log('[PANORAMA] Buscando odds reais (compartilhando cache com Múltiplas)...');
+        
+        // 1. Buscar odds (virá do cache se já foi buscado antes)
+        const today = new Date().toISOString().split('T')[0];
+        const oddsRes = await fetch('/api/football-odds', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ csvText: lastCsvText, date: today }),
+        });
+        
+        const { oddsMap, fixtureMap } = oddsRes.ok 
+          ? await oddsRes.json() 
+          : { oddsMap: {}, fixtureMap: {} }; // fallback silencioso
+        
+        console.log(`[PANORAMA] Odds recebidas: ${Object.keys(oddsMap || {}).length} com odds reais`);
+        
+        // 2. Passar para o analyzer (igual às Múltiplas)
+        console.log('[PANORAMA] Processando jogos NS com odds reais...');
+        const analysis = await analyzeLiveMultiplesAsync(
+          lastCsvText, 
+          oddsMap, 
+          fixtureMap, 
+          [], 
+          selectedDDMM
+        );
         
         setNsGames(analysis.games ?? []); // ← guardar jogos completos do analyzer
-        console.log(`[PANORAMA] ${analysis.games?.length || 0} jogos NS processados com Cantos FT`);
+        console.log(`[PANORAMA] ${analysis.games?.length || 0} jogos NS processados com Cantos FT + odds reais`);
       } catch (error) {
         console.error('[PANORAMA] Erro ao processar jogos NS:', error);
+        // Fallback: processar sem odds reais
+        try {
+          console.log('[PANORAMA] Fallback: processando sem odds reais...');
+          const analysis = await analyzeLiveMultiplesAsync(lastCsvText, undefined, undefined, [], selectedDDMM);
+          setNsGames(analysis.games ?? []);
+          console.log(`[PANORAMA] ${analysis.games?.length || 0} jogos NS processados (fallback sem odds)`);
+        } catch (fallbackError) {
+          console.error('[PANORAMA] Erro no fallback:', fallbackError);
+        }
       } finally {
         setProcessingNs(false);
       }
