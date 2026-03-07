@@ -747,11 +747,18 @@ export class PreLiveMultipleAnalyzer {
         const gameTimeInMinutes = gameHour * 60 + gameMinute;
         
         // 🆕 Verificar se o jogo ainda não começou (margem de segurança de 5 minutos)
+        // 🆕 Fix 1: Desativar filtro de horário para datas ≠ hoje
+        const isAnalyzingToday = targetDDMM === todayDDMM;
         const gameStarted = gameTimeInMinutes <= currentTimeInMinutes - 5;
         
-        if (gameStarted) {
+        if (isAnalyzingToday && gameStarted) {
           console.log(`[HORARIO] Jogo já começou - descartado: ${g.match} (${gameHourStr} vs agora ${currentHour}:${currentMinute.toString().padStart(2, '0')})`);
           return false;
+        }
+        
+        // 🆕 Log informativo para datas ≠ hoje
+        if (!isAnalyzingToday) {
+          console.log(`[HORARIO] Filtro de horário desativado (data ≠ hoje): ${g.match} (${targetDDMM} vs hoje ${todayDDMM})`);
         }
         
         console.log(`[HORARIO] Jogo válido - futuro: ${g.match} (${gameHourStr} vs agora ${currentHour}:${currentMinute.toString().padStart(2, '0')})`);
@@ -886,26 +893,27 @@ export class PreLiveMultipleAnalyzer {
           }
           
           const valueResult = calculateValueBet(g, market, resolution);
-          if (valueResult && valueResult.edge !== null && valueResult.edge > 0) {
-            if (valueResult.edge > bestEdge) {
-              bestEdge = valueResult.edge;
-              bestMarket = market;
-              bestSelection = {
-                match: g.match,
-                league: g.league || "—",
-                hour: g.hour || "—",
-                market: market,
-                odd: resolution.marketOdd,
-                minOdd: resolution.minOdd,
-                hasValue: valueResult.hasValue,
-                edge: valueResult.edge,
-                recommendation: valueResult.recommendation,
-                reason: `Edge ${valueResult.edge}% · ${valueResult.recommendation}`,
-                gameProfile: classifyProfile(g) || "generic",
-                confidence: Math.round((computeConfidence(g)?.score || 0) * 100),
-                oddTag: resolution.source === 'api-real' ? "🟢 API" : resolution.source === 'csv' ? "📊 CSV" : "~Estimada",
-              };
-            }
+          
+          // 🆕 Fix 3: Simplificar seleção - aceitar qualquer mercado com edge > bestEdge
+          const edge = valueResult?.edge ?? 0;
+          if (edge > bestEdge) {
+            bestEdge = edge;
+            bestMarket = market;
+            bestSelection = {
+              match: g.match,
+              league: g.league || "—",
+              hour: g.hour || "—",
+              market: market,
+              odd: resolution.marketOdd,
+              minOdd: resolution.minOdd,
+              hasValue: valueResult?.hasValue || false,
+              edge: edge,
+              recommendation: valueResult?.recommendation || "Sem valor",
+              reason: `Edge ${edge}% · ${valueResult?.recommendation || "Sem valor"}`,
+              gameProfile: classifyProfile(g) || "generic",
+              confidence: Math.round((computeConfidence(g)?.score || 0) * 100),
+              oddTag: resolution.source === 'api-real' ? "🟢 API" : resolution.source === 'csv' ? "📊 CSV" : "~Estimada",
+            };
           }
         }
       }
@@ -951,24 +959,29 @@ export class PreLiveMultipleAnalyzer {
     // Filtrar apenas jogos Poison - ampliado para mais jogos
     const poisonGames = games.filter(g => detectPoisonTriggers(g).isPoison);
     
-    // Top 8 jogos Poison por score (aumentado de 5 para 8)
+    // 🆕 Opção 2: Pool expandido para mais oportunidades
+    // Top 20 jogos Poison por score (aumentado de 15 para 20)
     const topPoisonGames = poisonGames
       .sort((a, b) => {
         const scoreA = typeof computeScore(a) === 'number' ? computeScore(a) : (computeScore(a) as any)?.score || 0;
         const scoreB = typeof computeScore(b) === 'number' ? computeScore(b) : (computeScore(b) as any)?.score || 0;
+        const poisonA = detectPoisonTriggers(a);
+        const poisonB = detectPoisonTriggers(b);
+        // Priorizar jogos com nível de Poison mais alto
+        if (poisonA.highestLevel !== poisonB.highestLevel) return poisonB.highestLevel - poisonA.highestLevel;
         return scoreB - scoreA;
       })
-      .slice(0, 8);
+      .slice(0, 20);
 
-    console.log(`[BINGO-ALAVANC] ${topPoisonGames.length} jogos Poison encontrados (top 8)`);
+    console.log(`[BINGO-ALAVANC] ${topPoisonGames.length} jogos Poison encontrados (top 20 - EXPANDIDO)`);
 
     const selections: any[] = [];
     const usedGames = new Set<string>();
     const gameMarketCount = new Map<string, number>(); // Controlar mercados por jogo
 
-    // 🆕 Permitir até 2 mercados por jogo (aumentado de 1)
+    // 🆕 Limites mais generosos para mais oportunidades
     const MAX_MARKETS_PER_GAME = 2;
-    const MAX_SELECTIONS = 8; // Aumentado de 5 para 8 seleções
+    const MAX_SELECTIONS = 12; // Aumentado de 8 para 12 seleções (mais mercados = mais oportunidades)
 
     // Processar todos os jogos Poison
     for (const g of topPoisonGames) {
@@ -982,8 +995,7 @@ export class PreLiveMultipleAnalyzer {
 
       console.log(`[BINGO-ALAVANC] Analisando jogo ${g.match} (${currentGameMarkets + 1}/${MAX_MARKETS_PER_GAME} mercados)`);
 
-      // 🆕 Encontrar TODOS os mercados com edge positivo (não apenas o de maior odd)
-      const validMarkets = [];
+      // 🆕 Mercados disponíveis expandidos para mais oportunidades
       const allMarkets = [
         "Ambas Marcam — Sim",
         "Mais de 2.5 gols FT",
@@ -994,26 +1006,28 @@ export class PreLiveMultipleAnalyzer {
         "Mais de 8.5 escanteios FT",
         "Mais de 9.5 escanteios FT",
         "Mais de 10.5 escanteios FT",
+        "Dupla Chance - Empate ou Casa",
+        "Dupla Chance - Empate ou Visitante",
+        "Mais de 3.5 gols FT",
+        "Menos de 3.5 gols FT",
       ];
+
+      // 🆕 Encontrar TODOS os mercados com edge positivo
+      const validMarkets: any[] = [];
 
       for (const market of allMarkets) {
         const resolution = this.resolveOdd(g, market);
         if (resolution.marketOdd) {
-          // 🆕 Proteção contra odds anormais
-          if (resolution.marketOdd < 1.35 || resolution.marketOdd > 4.00) {
-            console.log(`[BINGO-ALAVANC] Seleção descartada — odd fora do range operável: ${resolution.marketOdd}`);
-            continue;
-          }
-          
-          // 🆕 Proteção adicional para mercados tradicionais
-          const traditionalMarkets = ["Ambas Marcam — Sim", "Mais de 2.5 gols FT", "Mais de 1.5 gols FT", "Casa para vencer", "Visitante para vencer"];
-          if (traditionalMarkets.includes(market) && resolution.marketOdd > 4.00) {
-            console.log(`[BINGO-ALAVANC] Descartado — odd improvável para mercado simples: ${market} @ ${resolution.marketOdd}`);
+          // 🆕 Flexibilizar restrições para mais oportunidades - Opção 2
+          // Aceitar edge >= -10% (mais flexível) e odds mais amplas
+          if (resolution.marketOdd < 1.20 || resolution.marketOdd > 5.50) {
+            console.log(`[BINGO-ALAVANC] Seleção descartada — odd fora do range expandido: ${resolution.marketOdd}`);
             continue;
           }
           
           const valueResult = calculateValueBet(g, market, resolution);
-          if (valueResult && valueResult.edge !== null && valueResult.edge > 0) {
+          // 🆕 Aceitar edge >= -10% para mais oportunidades (era -5%)
+          if (valueResult && valueResult.edge !== null && valueResult.edge >= -10) {
             validMarkets.push({
               market,
               odd: resolution.marketOdd,
@@ -1021,12 +1035,59 @@ export class PreLiveMultipleAnalyzer {
               resolution,
               valueResult
             });
+            console.log(`[BINGO-ALAVANC] ✅ Mercado aceito: ${market} @ ${resolution.marketOdd} (edge ${valueResult.edge}%)`);
           }
         }
       }
 
       // 🆕 Ordenar por odd (maior primeiro) para maximizar alavancagem
       validMarkets.sort((a, b) => b.odd - a.odd);
+
+      // 🆕 CORREÇÃO: Verificar favorito PRIMEIRO, depois usar odd como desempate
+      const fav = getFavorito(g);
+      const homeMarket = validMarkets.find(m => m.market === "Casa para vencer");
+      const awayMarket = validMarkets.find(m => m.market === "Visitante para vencer");
+      
+      if (homeMarket && awayMarket) {
+        console.log(`[BINGO-ALAVANC] 🚨 Mercados opostos detectados em ${g.match} - removendo um`);
+        console.log(`[BINGO-ALAVANC] 📍 Favorito detectado: ${fav.lado || 'SEM FAVORITO'} para ${g.match}`);
+        
+        let mercadoRemovido = "";
+        
+        // Regra 1: Se há favorito claro, manter o mercado do favorito
+        if (fav.lado === "🏠") {
+          // Favorito é casa - remover visitante
+          const index = validMarkets.findIndex(m => m.market === "Visitante para vencer");
+          if (index > -1) {
+            validMarkets.splice(index, 1);
+            mercadoRemovido = `Visitante para vencer (${awayMarket.odd}) - mantendo Casa (${homeMarket.odd})`;
+          }
+        } else if (fav.lado === "✈️") {
+          // Favorito é visitante - remover casa
+          const index = validMarkets.findIndex(m => m.market === "Casa para vencer");
+          if (index > -1) {
+            validMarkets.splice(index, 1);
+            mercadoRemovido = `Casa para vencer (${homeMarket.odd}) - mantendo Visitante (${awayMarket.odd})`;
+          }
+        } else {
+          // Sem favorito claro - usar odd como desempate (manter maior odd)
+          if (homeMarket.odd >= awayMarket.odd) {
+            const index = validMarkets.findIndex(m => m.market === "Visitante para vencer");
+            if (index > -1) {
+              validMarkets.splice(index, 1);
+              mercadoRemovido = `Visitante para vencer (${awayMarket.odd}) - mantendo Casa (${homeMarket.odd})`;
+            }
+          } else {
+            const index = validMarkets.findIndex(m => m.market === "Casa para vencer");
+            if (index > -1) {
+              validMarkets.splice(index, 1);
+              mercadoRemovido = `Casa para vencer (${homeMarket.odd}) - mantendo Visitante (${awayMarket.odd})`;
+            }
+          }
+        }
+        
+        console.log(`[BINGO-ALAVANC] ✅ Removido ${mercadoRemovido}`);
+      }
 
       // 🆕 Adicionar até 2 melhores mercados por jogo
       const marketsToAdd = Math.min(2, validMarkets.length, MAX_MARKETS_PER_GAME - currentGameMarkets);
@@ -1035,6 +1096,17 @@ export class PreLiveMultipleAnalyzer {
         
         const bestMarket = validMarkets[i];
         const poison = detectPoisonTriggers(g);
+
+        // 🆕 Fix 2: Verificação adicional - não permitir mercado oposto no mesmo bilhete
+        const hasOppositeMarket = selections.some(s => 
+          (bestMarket.market === "Casa para vencer" && s.market === "Visitante para vencer") ||
+          (bestMarket.market === "Visitante para vencer" && s.market === "Casa para vencer")
+        );
+
+        if (hasOppositeMarket) {
+          console.log(`[BINGO-ALAVANC] 🚫 Mercado oposto já existe no bilhete - pulando ${bestMarket.market} para ${g.match}`);
+          continue;
+        }
         
         const selection = {
           match: g.match,
@@ -1061,18 +1133,34 @@ export class PreLiveMultipleAnalyzer {
       usedGames.add(g.match);
     }
 
-    if (selections.length < 3) {
-      console.log(`[BINGO-ALAVANC] ❌ Apenas ${selections.length} mercados Poison com edge positivo - bilhete não gerado`);
+    if (selections.length < 4) {
+      console.log(`[BINGO-ALAVANC] ❌ Apenas ${selections.length} mercados Poison com edge - mínimo reduzido para 4`);
       return null;
     }
 
-    // Calcular odd total e métricas
-    const combinedOdd = selections.reduce((acc, s) => acc * s.odd, 1);
+    // Calcular métricas iniciais (serão recalculadas após o cap)
     const stake = 15;
-    const expectedReturn = combinedOdd * stake;
     const avgEdge = selections.reduce((acc, s) => acc + (s.edge / 100), 0) / selections.length;
 
-    console.log(`[BINGO-ALAVANC] ✅ ${selections.length} seleções | odd=${combinedOdd.toFixed(2)} | edge médio=${(avgEdge * 100).toFixed(1)}%`);
+    console.log(`[BINGO-ALAVANC] ✅ ${selections.length} seleções | edge médio=${(avgEdge * 100).toFixed(1)}%`);
+
+    // 🆕 Fix 1: Cap de odd máxima em 200
+    let combinedOdd = selections.reduce((acc, s) => acc * s.odd, 1);
+    if (combinedOdd > 200) {
+      console.log(`[BINGO-ALAVANC] Odd total ${combinedOdd.toFixed(2)} acima do cap 200 — cortando seleções`);
+      // Remover a última seleção até ficar abaixo do cap
+      while (selections.reduce((a, s) => a * s.odd, 1) > 200 && selections.length > 3) {
+        const removed = selections.pop();
+        console.log(`[BINGO-ALAVANC] Removida seleção: ${removed?.market} @ ${removed?.odd}`);
+      }
+      // Recalcular combinedOdd após remoções
+      combinedOdd = parseFloat(selections.reduce((a, s) => a * s.odd, 1).toFixed(2));
+      console.log(`[BINGO-ALAVANC] Odd total ajustada para ${combinedOdd} com ${selections.length} seleções`);
+    }
+
+    // 🆕 Fix 2: Calcular expectedReturn DEPOIS do cap
+    const expectedReturn = combinedOdd * stake;
+    console.log(`[BINGO-ALAVANC] Odd final: ${combinedOdd.toFixed(2)} | Retorno: R$ ${expectedReturn.toFixed(2)}`);
 
     return {
       id: `bingo-alavanc-${Date.now()}`,
@@ -1205,8 +1293,8 @@ export class PreLiveMultipleAnalyzer {
             cantFTH:    g.cantFTH     ?? 0,
             cantFTA:    g.cantFTA     ?? 0,
             gol05HTFav: fav.gol05HTFav ?? 0,
-            xgH:        g.xgH        ?? g.xG ?? 0,  // 🆕 Adicionar fallback xG
-            xgA:        g.xgA        ?? 0,
+            xgH: (g.exG ?? g.xG ?? 0) / 2,  // 🆕 Fix 4: dividir xG total por 2 como estimativa
+            xgA: (g.exG ?? g.xG ?? 0) / 2,  // 🆕 Fix 4: dividir xG total por 2 como estimativa
           },
         };
       });
@@ -1967,7 +2055,7 @@ export class PreLiveMultipleAnalyzer {
   }
 
   // 🆕 CONSTRÓI BOX FT PERSONALIZADO (sem verificação de conflitos externos) com fallback de odds reais
-  async buildCustomFTBox(selectedGames: any[], selectedMarketsData: any[]): Promise<LiveMultipleSuggestion | null> {
+  public async buildCustomFTBox(selectedGames: any[], selectedMarketsData: any[]): Promise<LiveMultipleSuggestion | null> {
     if (selectedGames.length < 2 || selectedMarketsData.length < 2) {
       console.log(`[SGP-ftbox-custom] ❌ Jogos insuficientes: ${selectedGames.length} jogos, ${selectedMarketsData.length} mercados`);
       return null;

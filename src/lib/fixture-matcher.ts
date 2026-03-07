@@ -130,10 +130,13 @@ export interface MatchResult {
 export function matchFixtures(
   csvMatches: CsvMatch[],
   apiFixtures: ApiFixture[],
-  minConfidence = 0.55
+  minConfidence = 0.65  // 🆕 Fix 3: Elevado threshold de 0.55 para 0.65
 ): { matched: MatchResult[]; unmatched: CsvMatch[] } {
   const matched: MatchResult[] = [];
   const unmatched: CsvMatch[] = [];
+  
+  // 🆕 Fix 2: Rastrear fixtures já atribuídos para evitar colisão
+  const usedFixtures = new Set<number>();
 
   for (const csvMatch of csvMatches) {
     let bestScore = 0;
@@ -162,7 +165,9 @@ export function matchFixtures(
       }
     }
 
-    if (bestFixture && bestScore >= minConfidence) {
+    if (bestFixture && bestScore >= minConfidence && !usedFixtures.has(bestFixture.fixtureId)) {
+      // Fix 2: Verificar se fixture já foi usado
+      usedFixtures.add(bestFixture.fixtureId);
       matched.push({
         csvMatch,
         fixtureId: bestFixture.fixtureId,
@@ -173,9 +178,14 @@ export function matchFixtures(
         apiAwayTeam: bestFixture.awayTeam,
       });
     } else {
-      // 🆕 Log borderline para diagnóstico (45-54%)
+      // Log borderline para diagnóstico (ajustado para novo threshold)
       if (bestScore >= 0.45 && bestScore < minConfidence && bestFixture) {
         console.info(`[Matcher] Borderline: CSV="${csvMatch.home} x ${csvMatch.away}" | Candidato="${bestFixture.homeTeam} x ${bestFixture.awayTeam}" | Score=${(bestScore*100).toFixed(0)}%`);
+      }
+      
+      // Fix 2: Log de fixture já usado
+      if (bestFixture && usedFixtures.has(bestFixture.fixtureId)) {
+        console.warn(`[Matcher] Fixture colisão: ID ${bestFixture.fixtureId} já atribuído a outro jogo - ignorando ${csvMatch.home} x ${csvMatch.away}`);
       }
       
       // Log para diagnóstico

@@ -122,9 +122,9 @@ export function resolveMarketResult(label: string, game: any): "win" | "lose" | 
       if (nl.includes("over 4.5")) return cantHTTotal >= 6 ? "avg" : "no-odd";
     }
     // Cantos FT total
-    if (nl.includes("over 9.5")) return cantFTTotal >= 11 ? "avg" : "no-odd";
-    if (nl.includes("over 8.5")) return cantFTTotal >= 10 ? "avg" : "no-odd";
-    if (nl.includes("over 7.5")) return cantFTTotal >=  9 ? "avg" : "no-odd";
+    if (nl.includes("over 9.5")) return cantFTTotal >= 11 ? "win" : "lose"; // 🆕 Fix 5: avg->win, no-odd->lose
+    if (nl.includes("over 8.5")) return cantFTTotal >= 10 ? "win" : "lose"; // 🆕 Fix 5: avg->win, no-odd->lose
+    if (nl.includes("over 7.5")) return cantFTTotal >=  9 ? "win" : "lose"; // 🆕 Fix 5: avg->win, no-odd->lose
   }
   
   // Shots on goal HT — resolved by PackBall historical average (chHTH/chHTA)

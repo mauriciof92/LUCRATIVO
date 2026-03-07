@@ -31,3 +31,76 @@ export interface BacktestRecord {
     summary: any;
   };
 }
+
+export interface CsvDiarioRecord {
+  data: string;
+  csv_text: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// 🆕 Funções para persistência de CSV bruto por data
+export async function saveCsvDiario(data: string, csvText: string): Promise<boolean> {
+  if (!supabaseConfigured) {
+    console.warn('[CSV-DIARIO] Supabase não configurado - salvando apenas no localStorage');
+    localStorage.setItem(`csv-diario-${data}`, csvText);
+    return true;
+  }
+
+  try {
+    const { error } = await supabase
+      .from('csv_diario')
+      .upsert({
+        data: data,
+        csv_text: csvText,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'data' });
+
+    if (error) {
+      console.error('[CSV-DIARIO] Erro ao salvar CSV:', error);
+      return false;
+    }
+
+    console.log(`[CSV-DIARIO] CSV salvo para data ${data} (${csvText.length} chars)`);
+    return true;
+  } catch (e) {
+    console.error('[CSV-DIARIO] Erro ao salvar CSV:', e);
+    return false;
+  }
+}
+
+// 🆕 Função para salvar CSV manualmente com data específica (para testes)
+export async function saveCsvDiarioManual(data: string, csvText: string): Promise<boolean> {
+  console.log(`[CSV-DIARIO-MANUAL] Salvando CSV manual para data ${data}`);
+  return saveCsvDiario(data, csvText);
+}
+
+export async function loadCsvDiario(data: string): Promise<string | null> {
+  if (!supabaseConfigured) {
+    console.log('[CSV-DIARIO] Supabase não configurado - carregando do localStorage');
+    return localStorage.getItem(`csv-diario-${data}`) || null;
+  }
+
+  try {
+    const { data: result, error } = await supabase
+      .from('csv_diario')
+      .select('csv_text')
+      .eq('data', data)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        console.log(`[CSV-DIARIO] Nenhum CSV encontrado para data ${data}`);
+      } else {
+        console.error('[CSV-DIARIO] Erro ao carregar CSV:', error);
+      }
+      return null;
+    }
+
+    console.log(`[CSV-DIARIO] CSV carregado para data ${data} (${result.csv_text.length} chars)`);
+    return result.csv_text;
+  } catch (e) {
+    console.error('[CSV-DIARIO] Erro ao carregar CSV:', e);
+    return null;
+  }
+}

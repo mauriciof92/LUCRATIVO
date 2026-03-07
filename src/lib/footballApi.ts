@@ -157,6 +157,32 @@ export async function fetchFixturesByDate(
   }));
 }
 
+// 🆕 Fix 4: Buscar fixtures por liga (mais eficiente)
+export async function fetchFixturesByLeagues(
+  dates: string[],
+  leagueIds: number[],
+  apiKey: string
+): Promise<Array<{ id: number; home: string; away: string; homeId: number; awayId: number }>> {
+  const allFixtures = [];
+  
+  for (const leagueId of leagueIds) {
+    for (const date of dates) {
+      const data = await apiFetch(`/fixtures?date=${date}&league=${leagueId}`, apiKey);
+      const fixtures = (data.response ?? []).map((f: any) => ({
+        id: f.fixture?.id as number,
+        home: f.teams?.home?.name ?? "",
+        away: f.teams?.away?.name ?? "",
+        homeId: f.teams?.home?.id as number,
+        awayId: f.teams?.away?.id as number,
+      }));
+      allFixtures.push(...fixtures);
+      console.log(`[API-Football] fetchFixturesByLeague ${date} league=${leagueId}: results=${data.results ?? 0}`);
+    }
+  }
+  
+  return allFixtures;
+}
+
 /** Uses /fixtures/events to count HT events (elapsed ≤ 45) */
 async function fetchHalfTimeEvents(
   fixtureId: number,
@@ -227,18 +253,19 @@ async function fetchHalfTimeEvents(
   const totalFTHome = getStatVal(homeId, "Total Shots");      // shots_on_goal + shots_off_goal
   const totalFTAway = getStatVal(awayId, "Total Shots");      // shots_on_goal + shots_off_goal
 
-  // Buscar cantos HT via statistics (igual ao chutes HT)
-  const cornerStats = await apiFetch(
+  // 🆕 Fix 1: Buscar dados HT (shots + cantos) em UMA única chamada
+  const htStats = await apiFetch(
     `/fixtures/statistics?fixture=${fixtureId}&half=true`, apiKey
   );
-  const cornerData: any[] = cornerStats.response ?? [];
+  const htData: any[] = htStats.response ?? [];
   
-  // 🆕 LOG DE DIAGNÓSTICO - Corners Response
-  console.log(`[CORNERS-RAW] fixture=${fixtureId} half=true: stats=${cornerData.length} teams=${cornerData.map(s => s.team?.id).join(',')}`);
+  // 🆕 LOG DE DIAGNÓSTICO - HT Statistics Response (unificado)
+  console.log(`[HT-STATS-RAW] fixture=${fixtureId} half=true: stats=${htData.length} teams=${htData.map(s => s.team?.id).join(',')}`);
   
-  if (cornerData.length) {
+  // Extrair corners HT dos mesmos dados
+  if (htData.length) {
     const getCorner = (teamId: number): number => {
-      const ts = cornerData.find((s: any) => s.team?.id === teamId);
+      const ts = htData.find((s: any) => s.team?.id === teamId);
       if (!ts) return 0;
       const stat = (ts.statistics ?? []).find(
         (s: any) => s.type === 'Corner Kicks'
@@ -288,7 +315,7 @@ async function fetchHalfTimeEvents(
   };
 }
 
-// ─── API-Football: shots HT via statistics half=1 ────────────────────────────
+// ─── API-Football: shots HT via statistics half=1 (REUTILIZADO) ───────────────────────
 
 async function fetchShotsHTFromApi(
   fixtureId: number,
@@ -297,6 +324,8 @@ async function fetchShotsHTFromApi(
   apiKey: string
 ): Promise<{ shotsHTHome: number; shotsHTAway: number } | null> {
   try {
+    // 🆕 Fix 1: Reutilizar dados HT já buscados pela função principal
+    // Esta função agora será chamada apenas se os dados HT não foram buscados ainda
     const data = await apiFetch(`/fixtures/statistics?fixture=${fixtureId}&half=true`, apiKey);
     const stats: any[] = data.response ?? [];
     
@@ -344,23 +373,21 @@ export async function fetchRealStatsForMatches(
   }
   let reqUsed = 0;
 
-  // Fetch fixture lists per date via API-Football (1 req each)
-  const fixturesByDate: Record<string, Array<{ id: number; home: string; away: string; homeId: number; awayId: number }>> = {};
-  for (const date of dates) {
-    fixturesByDate[date] = await fetchFixturesByDate(date, apiKey);
-    reqUsed++;
-  }
+  // 🆕 Fix 4: Buscar fixtures por liga em vez de por data (mais eficiente)
+  // Principais ligas monitoradas (reduz de 403 para ~10 chamadas)
+  const majorLeagueIds = [78, 135, 61, 39, 140, 88, 2, 3, 71]; // Bundesliga, Serie A, Ligue 1, Premier League, La Liga, etc. (78 removido duplicado)
+  const allFixtures = await fetchFixturesByLeagues(dates, majorLeagueIds, apiKey);
+  reqUsed += majorLeagueIds.length * dates.length; // ~10 chamadas em vez de 403
+  
+  console.log(`[API-Football] 🆕 Fix 4: Buscou ${allFixtures.length} fixtures em ${majorLeagueIds.length} ligas (${reqUsed} req vs 403 anterior)`);
 
   const results: RealStats[] = [];
 
   for (const match of matches) {
-    const dateKey = match.date.substring(0, 10);
-    const fixtures = fixturesByDate[dateKey] ?? [];
-
-    // Find best matching fixture in API-Football (may be empty on free plan for historical dates)
-    let bestFixture: typeof fixtures[0] | null = null;
+    // Find best matching fixture in all fixtures (agora busca em allFixtures)
+    let bestFixture: typeof allFixtures[0] | null = null;
     let bestScore = 0;
-    for (const f of fixtures) {
+    for (const f of allFixtures) {
       const combined = (fuzzyMatchTeam(match.homeTeam, f.home) + fuzzyMatchTeam(match.awayTeam, f.away)) / 2;
       if (combined > bestScore && combined >= 0.42) { bestScore = combined; bestFixture = f; }
     }
@@ -408,7 +435,7 @@ export async function fetchRealStatsForMatches(
     });
   }
 
-  const totalFixtures = Object.values(fixturesByDate).reduce((s, f) => s + f.length, 0);
+  const totalFixtures = allFixtures.length;
   return { stats: results, reqUsed, debug: { totalFixtures, dates } };
 }
 

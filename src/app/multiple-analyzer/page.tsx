@@ -7,6 +7,7 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, R
 import { useBacktest, STAKE_FIXA } from "../../hooks/useBacktest";
 import { C, KPI as KpiCard, EmptyState, mktCat as catLabel } from "../../components/ui";
 import { PreLiveMultipleAnalyzer, analyzeLiveMultiplesAsync } from "../../lib/pre-live-multiple-analyzer";
+import { loadCsvDiario } from "../../lib/supabase";
 
 type Period = 7 | 30 | 90;
 
@@ -257,7 +258,7 @@ function SinfoniaCard({ suggestion }: { suggestion: any }) {
                       border: '2px solid #30363d',
                       flexShrink: 0,
                     }} />
-                    <span style={{ fontSize: 14, color: '#e6edf3' }}>
+                    <span style={{ fontSize: 14, color: justified.blocked ? '#f85149' : '#e6edf3' }}>
                       {sel.market}
                     </span>
                   </div>
@@ -303,6 +304,14 @@ function SinfoniaCard({ suggestion }: { suggestion: any }) {
                   }}>
                     {evLabel}
                   </span>
+
+                  {/* 🆕 Fix 3: Badge de bloqueio */}
+                  {justified.blocked && (
+                    <span style={{ fontSize: 10, color: '#f85149', background: '#f8514915',
+                      padding: '1px 6px', borderRadius: 4 }}>
+                      ⛔ Prob baixa
+                    </span>
+                  )}
 
                   {/* Justificativa textual */}
                   <span style={{
@@ -800,7 +809,7 @@ function FTBoxBuilder({ ftBoxCandidates, ftBoxSelections, setFtBoxSelections, li
 const TICKET_STYLES: Record<string, { label: string; color: string; icon: string }> = {
   // 🆕 Novos bilhetes Bingo (substituem clássicos)
   bingoSeguro:  { label: 'Bingo Seguro',  color: '#58a6ff', icon: '🎯' },
-  bingoAlavanc: { label: 'Bingo Alavanc', color: '#ff1744', icon: '�' },
+  bingoAlavanc: { label: 'Bingo Alavanc', color: '#ff1744', icon: '🚀' },
   // Manter: Sinfonia e FT Box
   sinfonia:    { label: 'Sinfonia',     color: '#00e676', icon: '🐦' },
   ftbox:       { label: 'Box FT',      color: '#ff9800', icon: '🔥' },
@@ -819,11 +828,74 @@ export default function MultipleAnalyzerPage() {
   const [showUnmatchedDetails, setShowUnmatchedDetails] = useState(false);
   const [ignoredMatches, setIgnoredMatches] = useState<string[]>([]);
   const [sinfoniaIdx, setSinfoniaIdx] = useState(0);  // 🆕 Estado de navegação da Sinfonia
+  
+  // 🆕 Estado para filtro de data - abordagem segura para SSR
+  const [selectedDate, setSelectedDate] = useState<string>("0703"); // Default: 07/03 (hoje)
+  const [localCsvText, setLocalCsvText] = useState<string>(""); // CSV da data selecionada
+  const [csvDisponivel, setCsvDisponivel] = useState<boolean>(true); // 🆕 Fix 1: CSV disponível para data
+  
+  
+  // 🆕 Debug: função global para salvar CSV manualmente
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).saveCsvManual = async (data: string, csvText: string) => {
+        const { saveCsvDiarioManual } = await import('../../lib/supabase');
+        const success = await saveCsvDiarioManual(data, csvText);
+        if (success) {
+          console.log(`[DEBUG] CSV salvo manualmente para ${data}`);
+          // Recarregar CSV da data selecionada
+          const { loadCsvDiario } = await import('../../lib/supabase');
+          const loadedCsv = await loadCsvDiario(selectedDate);
+          if (loadedCsv) {
+            setLocalCsvText(loadedCsv);
+            console.log(`[DEBUG] CSV recarregado para ${selectedDate}`);
+          }
+        }
+        return success;
+      };
+      console.log('[DEBUG] Função saveCsvManual disponível no console: saveCsvManual("0803", csvText)');
+    }
+  }, [selectedDate]);
+  
+  // 🆕 Setar data atual no cliente para evitar problemas de SSR
+  useEffect(() => {
+    const now = new Date()
+    const day = String(now.getUTCDate()).padStart(2, '0') // 🆕 Usar UTC
+    const month = String(now.getUTCMonth() + 1).padStart(2, '0') // 🆕 Usar UTC
+    const todayDDMM = `${day}${month}`
+    console.log('[DEBUG] Data atual (UTC):', day, month, todayDDMM)
+    setSelectedDate(todayDDMM)
+  }, [])
 
-  // 🆕 Estados para FT Box Personalizado
-  const [showFTBoxBuilder, setShowFTBoxBuilder] = useState(false);
-  const [selectedGames, setSelectedGames] = useState<Set<string>>(new Set());
-  const [selectedMarkets, setSelectedMarkets] = useState<Set<string>>(new Set());
+  // 🆕 Fix 2: Para hoje, usar CSV global; para outras datas, buscar no Supabase
+  useEffect(() => {
+    const now = new Date()
+    const todayDDMM = `${String(now.getUTCDate()).padStart(2, '0')}${String(now.getUTCMonth() + 1).padStart(2, '0')}`
+    
+    if (selectedDate === todayDDMM) {
+      // 🆕 Para hoje, usar CSV global (já importado pelo Admin)
+      setLocalCsvText('');  // usa lastCsvText como fallback natural
+      setCsvDisponivel(!!lastCsvText);
+      console.log('[DEBUG] Usando CSV global para hoje (hoje)');
+      return
+    }
+    
+    // 🆕 Só buscar no Supabase para datas diferentes de hoje
+    async function loadCsvForDate() {
+      console.log(`[CSV-DIARIO] Carregando CSV para data ${selectedDate} (diferente de hoje)`);
+      const csvText = await loadCsvDiario(selectedDate);
+      if (csvText) {
+        setLocalCsvText(csvText);
+        setCsvDisponivel(true);
+        console.log(`[CSV-DIARIO] CSV carregado com sucesso (${csvText.length} chars)`);
+      } else {
+        setLocalCsvText("");
+        setCsvDisponivel(false);
+        console.log(`[CSV-DIARIO] Nenhum CSV encontrado para data ${selectedDate}`);
+      }
+    }
+    loadCsvForDate();
+  }, [selectedDate, lastCsvText]) // 🆕 Removido todayDDMM do array de dependências
   
   // 🆕 Nova estrutura para FT Box Builder reformado
   const [ftBoxSelections, setFtBoxSelections] = useState<any[]>([]);
@@ -891,12 +963,16 @@ export default function MultipleAnalyzerPage() {
   const games = todayGames.length > 0 ? todayGames : results;
   // Usar CSV original preservado pelo hook (fallback: localStorage)
   const csvText = useMemo(() => {
+    // 🆕 Prioridade 1: CSV da data selecionada (Supabase)
+    if (localCsvText) return localCsvText;
+    // 🆕 Prioridade 2: CSV original do hook (fallback para hoje)
     if (lastCsvText) return lastCsvText;
+    // 🆕 Prioridade 3: localStorage (fallback offline)
     if (typeof window !== 'undefined') {
       return localStorage.getItem('lucrativo-last-csv') ?? '';
     }
     return '';
-  }, [lastCsvText]);
+  }, [localCsvText, lastCsvText]);
 
   const handleAnalyze = async () => {
     const text = csvText.trim();
@@ -929,8 +1005,8 @@ export default function MultipleAnalyzerPage() {
         // Continua sem odds reais — não bloqueia a análise
       }
 
-      // 🆕 2. Substituir chamada com oddsMap/fixtureMap
-      const result = await analyzeLiveMultiplesAsync(text, oddsMap, fixtureMap, ignoredMatches);
+      // 🆕 2. Substituir chamada com oddsMap/fixtureMap + selectedDate
+      const result = await analyzeLiveMultiplesAsync(text, oddsMap, fixtureMap, ignoredMatches, selectedDate);
       
       setSuggestions(result.suggestions ?? []);
       setSummary(result.summary);
@@ -995,125 +1071,6 @@ export default function MultipleAnalyzerPage() {
     }
   };
 
-  // 🆕 Obter mercados FT disponíveis para um jogo (com odds reais)
-  const getFTMarketsForGame = async (game: any) => {
-    const fav = (analyzer as any).getFavorito?.(game);
-    if (!fav) return [];
-
-    const markets = [];
-
-    // 🆕 BUSCAR ODDS REAIS DA API
-    let realOdds: { cornersLines: any[], shotsLines: any[] } = { cornersLines: [], shotsLines: [] };
-    if (game.apiFixtureId) {
-      realOdds = await (analyzer as any).fetchRealOdds(game.apiFixtureId);
-    }
-
-    // CHUTES FT — linha dinâmica
-    if (fav.chFavGol >= 4.0) {
-      const lambda = fav.chFavGol * 1.8;
-      const linhasChutes = [9.5, 10.5, 11.5, 12.5, 13.5, 14.5];
-      
-      // Encontrar linha mais alta com prob entre 70-82%
-      let bestThreshold = null;
-      for (const linha of [...linhasChutes].reverse()) {
-        const prob = poissonProb(lambda, linha);
-        if (prob >= 0.70 && prob <= 0.82) {
-          bestThreshold = { linha, prob };
-          break;
-        }
-      }
-      
-      if (bestThreshold) {
-        let odd = 1.70; // fallback
-        let oddsSource = 'fallback';
-        
-        // 🆕 Tentar usar odds reais
-        if (realOdds.shotsLines.length > 0) {
-          const closestLine = realOdds.shotsLines.reduce((closest: any, current: any) => {
-            const currentDiff = Math.abs(current.line - bestThreshold.linha);
-            const closestDiff = Math.abs(closest.line - bestThreshold.linha);
-            return currentDiff < closestDiff ? current : closest;
-          });
-          
-          if (Math.abs(closestLine.line - bestThreshold.linha) <= 1.5) {
-            odd = closestLine.odd;
-            oddsSource = 'api-real';
-          }
-        }
-        
-        markets.push({
-          key: `${game.match || `${game.home} x ${game.away}`}|chutes_ft`,
-          label: `${fav.nome} — Over ${bestThreshold.linha} Chutes FT`,
-          axis: 'chutes_ft',
-          odd: odd,
-          source: oddsSource,
-        });
-      } else {
-        // Fallback se nenhuma linha atingir 70-82%
-        markets.push({
-          key: `${game.match || `${game.home} x ${game.away}`}|chutes_ft`,
-          label: `${fav.nome} — Over 9.5 Chutes FT`,
-          axis: 'chutes_ft',
-          odd: 1.70,
-          source: 'fallback',
-        });
-      }
-    }
-
-    // CANTOS FT — linha dinâmica
-    if (fav.cantFavHT >= 3.0) {
-      const lambda = fav.cantFavHT * 1.6;
-      const linhasCantos = [3.5, 4.5, 5.5, 6.5];
-      
-      let bestThreshold = null;
-      for (const linha of [...linhasCantos].reverse()) {
-        const prob = poissonProb(lambda, linha);
-        if (prob >= 0.70 && prob <= 0.82) {
-          bestThreshold = { linha, prob };
-          break;
-        }
-      }
-      
-      if (bestThreshold) {
-        let odd = 1.85; // fallback
-        let oddsSource = 'fallback';
-        
-        // 🆕 Tentar usar odds reais
-        if (realOdds.cornersLines.length > 0) {
-          const closestLine = realOdds.cornersLines.reduce((closest: any, current: any) => {
-            const currentDiff = Math.abs(current.line - bestThreshold.linha);
-            const closestDiff = Math.abs(closest.line - bestThreshold.linha);
-            return currentDiff < closestDiff ? current : closest;
-          });
-          
-          if (Math.abs(closestLine.line - bestThreshold.linha) <= 1.0) {
-            odd = closestLine.odd;
-            oddsSource = 'api-real';
-          }
-        }
-        
-        markets.push({
-          key: `${game.match || `${game.home} x ${game.away}`}|cantos_ft`,
-          label: `${fav.nome} — Over ${bestThreshold.linha} Cantos FT`,
-          axis: 'cantos_ft',
-          odd: odd,
-          source: oddsSource,
-        });
-      } else {
-        // Fallback se nenhuma linha atingir 70-82%
-        markets.push({
-          key: `${game.match || `${game.home} x ${game.away}`}|cantos_ft`,
-          label: `${fav.nome} — Over 3.5 Cantos FT`,
-          axis: 'cantos_ft',
-          odd: 1.85,
-          source: 'fallback',
-        });
-      }
-    }
-
-    return markets;
-  };
-
   const handleFetchOdds = async () => {
     if (suggestions.length === 0) return;
     setLoadingOdds(true);
@@ -1140,6 +1097,7 @@ export default function MultipleAnalyzerPage() {
         analyzer.injectRealOdds(result.oddsMap, result.fixtureMap);
         const enriched = await analyzeLiveMultiplesAsync(csvText, result.oddsMap, result.fixtureMap, ignoredMatches);
         setSuggestions(enriched.suggestions);
+        setFtBoxCandidates(enriched.ftBoxCandidates ?? []); // 🆕 Fix 6: atualizar ftBoxCandidates
       }
 
       if ((result.unmatched ?? []).length > 0) {
@@ -1157,8 +1115,9 @@ export default function MultipleAnalyzerPage() {
     const text = csvText.trim();
     if (!text) return;
     try {
-      const result = await analyzeLiveMultiplesAsync(text, undefined, undefined, updated);
+      const result = await analyzeLiveMultiplesAsync(text, undefined, undefined, updated, selectedDate);
       setSuggestions(result.suggestions ?? []);
+      setFtBoxCandidates(result.ftBoxCandidates ?? []); // 🆕 Fix 6: atualizar ftBoxCandidates
       setSummary(result.summary);
     } catch (e) {
       console.error('Erro ao regerar bilhetes:', e);
@@ -1182,7 +1141,7 @@ export default function MultipleAnalyzerPage() {
     const text = csvText.trim();
     if (!text) return;
     try {
-      const result = await analyzeLiveMultiplesAsync(text);
+      const result = await analyzeLiveMultiplesAsync(text, undefined, undefined, [], selectedDate);
       setSuggestions(result.suggestions ?? []);
       setSummary(result.summary);
     } catch (e) {
@@ -1199,6 +1158,18 @@ export default function MultipleAnalyzerPage() {
           <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>🎫 Bilhetes do Dia</h1>
           <p style={{ color: C.muted, marginTop: 4, fontSize: 14 }}>
             Múltiplas geradas automaticamente a partir dos jogos processados
+          </p>
+          <p style={{ color: C.muted, fontSize: 14 }}>
+            Análise para {selectedDate.slice(0,2)}/{selectedDate.slice(2,4)}/2026
+            {(() => {
+              const now = new Date()
+              const todayDDMM = `${String(now.getDate()).padStart(2,'0')}${String(now.getMonth() + 1).padStart(2,'0')}`
+              return selectedDate !== todayDDMM && (
+                <span style={{ color: C.gold, marginLeft: 8 }}>
+                  {selectedDate > todayDDMM ? '📅 Data futura' : '📋 Retroativo'}
+                </span>
+              )
+            })()}
           </p>
         </div>
 
@@ -1219,38 +1190,64 @@ export default function MultipleAnalyzerPage() {
               <div style={{ color: C.green, fontSize: 20, fontWeight: 700 }}>{suggestions.length}</div>
             </div>
             <div>
-              <div style={{ color: C.muted, fontSize: 13, marginBottom: 4 }}>Box FT Personalizado</div>
-              <div style={{ color: customFTBox ? C.green : C.muted, fontSize: 20, fontWeight: 700 }}>
-                {customFTBox ? '✅' : '—'}
+              <div style={{ color: C.muted, fontSize: 13, marginBottom: 4 }}>CSV da Data</div>
+              <div style={{ color: localCsvText ? C.green : C.gold, fontSize: 20, fontWeight: 700 }}>
+                {localCsvText ? '✅' : '⚠️'}
               </div>
+            </div>
+            <div>
+              <div style={{ color: C.muted, fontSize: 13, marginBottom: 4 }}>Data de Análise</div>
+              <input
+                type="date"
+                value={(() => {
+                  // Garantir formato válido YYYY-MM-DD
+                  if (!selectedDate || selectedDate.length !== 4) return '2026-03-07'
+                  const day = selectedDate.slice(0, 2)
+                  const month = selectedDate.slice(2, 4)
+                  return `2026-${month}-${day}`
+                })()}
+                onChange={(e) => {
+                  const d = new Date(e.target.value)
+                  if (!isNaN(d.getTime())) { // Validar data válida
+                    const day = String(d.getUTCDate()).padStart(2, '0') // 🆕 Usar UTC
+                    const month = String(d.getUTCMonth() + 1).padStart(2, '0') // 🆕 Usar UTC
+                    const ddmm = `${day}${month}`
+                    console.log('[DEBUG] Data selecionada (UTC):', e.target.value, '→', day, month, ddmm)
+                    setSelectedDate(ddmm)
+                  } else {
+                    console.log('[DEBUG] Data inválida:', e.target.value)
+                  }
+                }}
+                style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6,
+                         color: C.text, padding: '6px 10px', fontSize: 13 }}
+              />
             </div>
           </div>
 
           <div style={{ display: 'flex', gap: 12, marginTop: 20, flexWrap: 'wrap' }}>
             <button
               onClick={handleAnalyze}
-              disabled={!!analyzing || !csvText}
+              disabled={!!analyzing || !csvText || !csvDisponivel} // 🆕 Fix 1: Bloquear se CSV não disponível
               style={{
-                background: analyzing ? C.muted : C.blue,
+                background: analyzing || !csvDisponivel ? C.muted : C.blue, // 🆕 Fix 1: Visual se indisponível
                 color: 'white', border: 'none', borderRadius: 6, padding: '10px 20px',
-                fontSize: 13, fontWeight: 600, cursor: analyzing ? 'not-allowed' : 'pointer',
+                fontSize: 13, fontWeight: 600, cursor: analyzing || !csvDisponivel ? 'not-allowed' : 'pointer',
               }}
             >
               {analyzing ? '⏳ Analisando...' : '🔍 Analisar Múltiplas'}
             </button>
 
-            <button
-              onClick={() => setShowFTBoxBuilder(!showFTBoxBuilder)}
-              style={{
-                background: showFTBoxBuilder ? C.gold : C.surface,
-                color: showFTBoxBuilder ? 'white' : C.text,
-                border: `1px solid ${C.gold}`,
-                borderRadius: 6, padding: '10px 20px',
-                fontSize: 13, fontWeight: 600, cursor: 'pointer',
-              }}
-            >
-              🔥 Box FT Personalizado
-            </button>
+            {/* 🆕 Fix 1: Aviso quando CSV não está disponível para data selecionada */}
+            {!csvDisponivel && selectedDate !== (() => {
+              const now = new Date()
+              const todayDDMM = `${String(now.getUTCDate()).padStart(2,'0')}${String(now.getUTCMonth() + 1).padStart(2,'0')}`
+              return todayDDMM
+            })() && (
+              <div style={{ color: '#f0c040', fontSize: 12, marginTop: 8 }}>
+                ⚠️ Nenhum CSV importado para {selectedDate.slice(0,2)}/{selectedDate.slice(2,4)}.
+                Importe o CSV desta data no Admin primeiro.
+              </div>
+            )}
 
             {suggestions.length > 0 && (
               <button
@@ -1280,139 +1277,6 @@ export default function MultipleAnalyzerPage() {
             )}
           </div>
         </div>
-
-        {/* 🆕 FT BOX BUILDER */}
-        {showFTBoxBuilder && (
-          <div style={{ background: C.surface, border: `2px solid ${C.gold}`, borderRadius: 12, padding: 24, marginBottom: 24 }}>
-            <h2 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 16px', color: C.gold }}>
-              🔥 Construtor de Box FT Personalizado
-            </h2>
-            <p style={{ color: C.muted, fontSize: 12, marginBottom: 20 }}>
-              Selecione 2-3 jogos e seus mercados FT. Este box ignora conflitos com outras múltiplas.
-            </p>
-
-            <div style={{ display: 'grid', gap: 16, maxHeight: 400, overflowY: 'auto' }}>
-              {ftBoxCandidates.map((candidate: any, candidateIndex: number) => {
-                const game = candidate.game;
-                const gameKey = game.match || `${game.home} x ${game.away}`;
-                const isSelected = selectedGames.has(gameKey);
-                const ftMarkets = candidate.markets || [];
-
-                if (ftMarkets.length === 0) return null;
-
-                return (
-                  <div key={`ftbox-candidate-${candidateIndex}-${gameKey}`} style={{
-                    background: isSelected ? `${C.gold}20` : 'transparent',
-                    border: `1px solid ${isSelected ? C.gold : C.border}`,
-                    borderRadius: 8, padding: 12,
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={(e) => {
-                          const newSelected = new Set(selectedGames);
-                          if (e.target.checked) {
-                            newSelected.add(gameKey);
-                          } else {
-                            newSelected.delete(gameKey);
-                            // Remover mercados deste jogo
-                            const marketsToRemove = Array.from(selectedMarkets).filter(m => m.startsWith(gameKey + '|'));
-                            marketsToRemove.forEach(m => selectedMarkets.delete(m));
-                          }
-                          setSelectedGames(newSelected);
-                        }}
-                        style={{ marginRight: 8 }}
-                      />
-                      <span style={{ fontSize: 13, fontWeight: 600 }}>{gameKey}</span>
-                    </div>
-
-                    {isSelected && (
-                      <div style={{ marginLeft: 24, display: 'grid', gap: 6 }}>
-                        {ftMarkets.map((market: any, marketIndex: number) => {
-                          const isMarketSelected = selectedMarkets.has(market.key);
-                          const axisConflict = Array.from(selectedMarkets).some(m => {
-                            if (m === market.key) return false;
-                            const [, axis] = m.split('|');
-                            return axis === market.axis;
-                          });
-
-                          return (
-                            <div key={market.key} style={{ display: 'flex', alignItems: 'center' }}>
-                              <input
-                                type="checkbox"
-                                checked={isMarketSelected}
-                                disabled={axisConflict && !isMarketSelected}
-                                onChange={(e) => {
-                                  const newMarkets = new Set(selectedMarkets);
-                                  if (e.target.checked) {
-                                    // Remover outro mercado do mesmo eixo
-                                    const toRemove = Array.from(newMarkets).find(m => {
-                                      const [, axis] = m.split('|');
-                                      return axis === market.axis;
-                                    });
-                                    if (toRemove) newMarkets.delete(toRemove);
-                                    newMarkets.add(market.key);
-                                  } else {
-                                    newMarkets.delete(market.key);
-                                  }
-                                  setSelectedMarkets(newMarkets);
-                                }}
-                                style={{ marginRight: 8, width: 14, height: 14 }}
-                              />
-                              <span style={{
-                                fontSize: 12,
-                                color: axisConflict && !isMarketSelected ? C.muted : C.text,
-                                textDecoration: axisConflict && !isMarketSelected ? 'line-through' : 'none'
-                              }}>
-                                {market.label} @ {market.odd}
-                                {market.source === 'api-real' && ' 🟢'}
-                                {axisConflict && !isMarketSelected && ' (conflito)'}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 20, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
-              <div style={{ fontSize: 12, color: C.muted }}>
-                {selectedGames.size} jogo(s) selecionado(s) • {selectedMarkets.size} mercado(s)
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  onClick={() => {
-                    setSelectedGames(new Set());
-                    setSelectedMarkets(new Set());
-                    setCustomFTBox(null);
-                  }}
-                  style={{
-                    background: 'transparent', border: `1px solid ${C.muted}`,
-                    borderRadius: 6, padding: '8px 16px', fontSize: 12,
-                    color: C.muted, cursor: 'pointer',
-                  }}
-                >
-                  Limpar
-                </button>
-                <button
-                  onClick={() => handleGenerateCustomFTBox()}
-                  disabled={selectedGames.size < 2 || selectedMarkets.size < 2}
-                  style={{
-                    background: selectedGames.size >= 2 && selectedMarkets.size >= 2 ? C.gold : C.muted,
-                    color: 'white', border: 'none', borderRadius: 6, padding: '8px 16px',
-                    fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                  }}
-                >
-                  Gerar Box FT
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* 🆕 BOX FT PERSONALIZADO REFORMADO */}
         {!suggestions.find(s => s.type === 'ftbox') && ftBoxCandidates?.length >= 2 && (

@@ -636,16 +636,25 @@ export function parseCSV(text) {
    FAVORITO
 ───────────────────────────────────────── */
 export function getFavorito(g) {
-  // 🆕 Usar % AF (coluna 32) em vez de AF bruto (coluna 35)
-  const afHome = g?.asPrecisaoH || 0;  // % AF correto
-  const afAway = g?.asPrecisaoA || 0;  // % AF correto
+  // 🆕 Usar % AF (coluna 46) com fallback para AF bruto (coluna 41)
+  const afHome = g?.asPrecisaoH || g?.afH || 0;  // % AF ou AF bruto como fallback
+  const afAway = g?.asPrecisaoA || g?.afA || 0;  // % AF ou AF bruto como fallback
 
   if (!afHome || !afAway) {
-    console.log(`❌ AF inválido: home=${afHome}, away=${afAway}`);
+    console.log(`❌ AF inválido: home=${afHome}, away=${afAway} (asPrecisao: H=${g?.asPrecisaoH}, A=${g?.asPrecisaoA} | af: H=${g?.afH}, A=${g?.afA})`);
     return { lado: "", nome: "", nomeUnder: "", afDiff: 0, afFav: 0, afUnder: 0, chFavGol: 0, chFavTot: 0, chUnderGol: 0, chUnderTot: 0, cantFavHT: 0, cantUnderHT: 0, cantFavFT: 0, gol05HTFav: 0 };
   }
 
-  const isCasa = afHome >= afAway;
+  // 🆕 CORREÇÃO: O time com MAIOR AF é o favorito (não necessariamente a casa)
+  const isHomeFavorito = afHome > afAway;  // > em vez de >= para evitar empates
+  const isAwayFavorito = afAway > afHome;
+  
+  // Se ambos têm AF igual, sem favorito claro
+  if (afHome === afAway) {
+    return { lado: "", nome: "", nomeUnder: "", afDiff: 0, afFav: 0, afUnder: 0, chFavGol: 0, chFavTot: 0, chUnderGol: 0, chUnderTot: 0, cantFavHT: 0, cantUnderHT: 0, cantFavFT: 0, gol05HTFav: 0 };
+  }
+
+  const isCasa = isHomeFavorito;  // Casa só é favorito se tiver AF maior
   return {
     nome:        isCasa ? g.home  : g.away,
     nomeUnder:   isCasa ? g.away  : g.home,

@@ -1,9 +1,9 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { runBacktest, processNSGames, enrichWithRealStats, validateWithManualInput, resolveMarketResult, type BetResult } from "../lib/backtest";
 import { loadStoredBacktest, saveStoredBacktest, type StoredBacktest } from "../lib/storage";
 import { fetchFixtureStatistics } from "../lib/footballApi";
 import { parseCSV, extractDateFromHour } from "../engine";
-import { supabase, supabaseConfigured } from "../lib/supabase";
+import { supabase, supabaseConfigured, saveCsvDiario } from "../lib/supabase";
 import { generateDeterministicId } from "../lib/utils";
 import { Badge, KPI, TH, TD, mktCat, C } from "../components/ui";
 
@@ -30,6 +30,36 @@ function getImportDateISO(hour: string): string {
   if (iso) return iso[1];
   // Sem data → data atual
   return new Date().toISOString().split('T')[0];
+}
+
+// 🆕 Extrai data DDMM ("0803") do CSV para persistência
+function getImportDateDDMM(csvText: string): string {
+  const lines = csvText.split('\n');
+  // 🆕 Pular primeira linha (cabeçalho) e ir para a primeira linha de dados
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() && !line.toLowerCase().includes('match')) {
+      const fields = line.split(';');
+      console.log(`[CSV-DEBUG] Linha ${i}: ${line.substring(0, 100)}...`);
+      console.log(`[CSV-DEBUG] Fields[${fields.length}]:`, fields.slice(0, 8));
+      if (fields.length >= 4) {
+        const hourField = fields[3]?.trim(); // 🆕 CORREÇÃO: campo hour é índice 3
+        console.log(`[CSV-DEBUG] Hour field: "${hourField}"`);
+        if (hourField && hourField !== '"Hour"') { // 🆕 Não pegar o nome do campo
+          const iso = getImportDateISO(hourField);
+          const date = new Date(iso);
+          const ddmm = `${String(date.getUTCDate()).padStart(2, '0')}${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+          console.log(`[CSV-DEBUG] Extraído: hour="${hourField}" → iso="${iso}" → ddmm="${ddmm}"`);
+          return ddmm;
+        }
+      }
+    }
+  }
+  // Fallback: data atual
+  const now = new Date();
+  const fallback = `${String(now.getUTCDate()).padStart(2, '0')}${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+  console.log(`[CSV-DEBUG] Fallback para data atual: ${fallback}`);
+  return fallback;
 }
 
 // Remove resultados mais antigos que RETENTION_DAYS
@@ -264,6 +294,16 @@ export const useBacktest = () => {
       const text = await f.text();
       setLastCsvText(text); // Preservar CSV original para Múltiplas
       if (typeof window !== 'undefined') localStorage.setItem('lucrativo-last-csv', text);
+      
+      // 🆕 Salvar CSV bruto por data no Supabase
+      const csvDataDDMM = getImportDateDDMM(text);
+      console.log(`[CSV-IMPORT] Salvando CSV bruto para data ${csvDataDDMM}`);
+      const csvSaved = await saveCsvDiario(csvDataDDMM, text);
+      if (csvSaved) {
+        console.log(`[CSV-IMPORT] CSV bruto salvo com sucesso para ${csvDataDDMM}`);
+      } else {
+        console.warn(`[CSV-IMPORT] Falha ao salvar CSV bruto para ${csvDataDDMM}`);
+      }
       // Usar processNSGames para processar TODOS os jogos (NS + FT)
       const allResults = processNSGames(text);
       // Adicionar stake fixa + importDate
