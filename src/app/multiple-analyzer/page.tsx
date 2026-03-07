@@ -1022,10 +1022,9 @@ export default function MultipleAnalyzerPage() {
     }
   };
 
-  // 🆕 Gerar Box FT Personalizado (reformado)
+  // Gerar Box FT Personalizado (reformado)
   const handleGenerateCustomFTBox = async (activeSelections: any[] = []) => {
-    // Se chamado pelo novo FTBoxBuilder, usa activeSelections
-    // Se chamado pelo legado, usa selectedGames/selectedMarkets
+    // Simplificado - usa apenas o novo formato do FTBoxBuilder
     let selectedGamesData: any[] = [];
     let selectedMarketsData: any[] = [];
 
@@ -1039,23 +1038,9 @@ export default function MultipleAnalyzerPage() {
         index
       }));
     } else {
-      // Formato legado
-      if (selectedGames.size < 2) {
-        setError('Selecione pelo menos 2 jogos para o Box FT.');
-        return;
-      }
-
-      selectedGamesData = games.filter((g: any) => 
-        selectedGames.has(g.match || `${g.home} x ${g.away}`)
-      );
-
-      selectedMarketsData = Array.from(selectedMarkets).map((marketKey, index) => {
-        const [gameMatch, marketType] = marketKey.split('|');
-        const game = selectedGamesData.find((g: any) => 
-          (g.match || `${g.home} x ${g.away}`) === gameMatch
-        );
-        return { game, marketType, key: marketKey, index };
-      }).filter(m => m.game);
+      // Removido formato legado - selectedGames não existe mais
+      setError('Selecione pelo menos 2 jogos para o Box FT.');
+      return;
     }
 
     try {
