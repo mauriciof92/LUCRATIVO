@@ -4,8 +4,13 @@ import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useBacktest } from "../../hooks/useBacktest";
 import { NavHeader } from "../../components/NavHeader";
-import { Settings, Database, Trash2, Upload, Key, AlertTriangle } from "lucide-react";
+import { Settings, Database, Trash2, Upload, Key, AlertTriangle, Beaker, BarChart3, Play, RotateCcw } from "lucide-react";
 import { supabase } from "../../lib/supabase";
+import { handleFetchRealOdds, handleClearDatabase, handleProcessar } from "../../lib/orchestration/admin-orchestration";
+import { analyzeLiveMultiplesAsync } from "../../lib/pre-live-multiple-analyzer";
+import { patchAnalyzerWithPoisson } from "../../lib/poisson-ab-test";
+import { runPoissonABTest } from "../../lib/poisson-test-runner";
+import { PoissonMode } from "../../lib/poisson-capsule";
 
 import { C, KPI as SharedKPI } from "../../components/ui";
 
@@ -37,48 +42,138 @@ export default function AdminPage() {
   const [loadingOdds, setLoadingOdds] = useState(false);
   const [odds, setOdds] = useState<any>({});
   const [unmatchedGames, setUnmatchedGames] = useState<any[]>([]);
+  const [oddsError, setOddsError] = useState<string>("");
 
-  // 🆕 Handler para buscar odds reais (baseado no multiple-analyzer)
-  const handleFetchRealOdds = async () => {
-    if (results.length === 0) {
-      alert("❌ Nenhum jogo encontrado. Importe o CSV primeiro!");
-      return;
-    }
-    
-    setLoadingOdds(true);
+  // 🧪 Estados Poisson Experimental
+  const [poissonExpanded, setPoissonExpanded] = useState(false);
+  const [poissonMode, setPoissonMode] = useState<PoissonMode>('off');
+  const [poissonLogs, setPoissonLogs] = useState<string[]>([]);
+  const [poissonTesting, setPoissonTesting] = useState(false);
+  const [poissonMetrics, setPoissonMetrics] = useState<any>(null);
+  const [analyzerPatched, setAnalyzerPatched] = useState(false);
+
+  // 🆕 Handler para buscar odds reais (importado do orchestration)
+  const fetchRealOdds = () => {
+    handleFetchRealOdds(results, setOdds, setLoadingOdds, setOddsError);
+  };
+
+  // 🧪 Handlers Poisson Experimental
+  const addPoissonLog = (message: string) => {
+    const timestamp = new Date().toLocaleTimeString();
+    setPoissonLogs(prev => [...prev, `[${timestamp}] ${message}`]);
+  };
+
+  const handleApplyPoissonPatch = async () => {
     try {
-      // Converter resultados para formato CSV
-      const csvText = results.map(r => 
-        `${r.hour},${r.match},${r.league},${r.mainMarket.label},${r.mainMarket.odd},${r.mainMarket.result || ''}`
-      ).join('\n');
+      addPoissonLog(`🔧 Aplicando patch Poisson modo: ${poissonMode.toUpperCase()}`);
+      const analyzer = { buildBingoSeguro: analyzeLiveMultiplesAsync };
+      patchAnalyzerWithPoisson(analyzer, poissonMode);
+      setAnalyzerPatched(true);
+      addPoissonLog(`✅ Patch aplicado com sucesso`);
+    } catch (error: unknown) {
+      const errorMsg = error instanceof Error ? error.message : 'Erro desconhecido';
+      addPoissonLog(`❌ Erro ao aplicar patch: ${errorMsg}`);
+    }
+  };
+
+  const handleRunPoissonABTest = async () => {
+    setPoissonTesting(true);
+    try {
+      addPoissonLog(`🧪 Iniciando teste A/B Poisson completo...`);
       
-      // API key é lida server-side pelo route handler
-      const today = new Date().toISOString().split('T')[0];
-      const res = await fetch('/api/football-odds', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ csvText, date: today }),
-      });
+      // Criar CSV mock para teste A/B
+      const today = new Date();
+      const todayDDMM = `08-03-2026`; // Forçar data que o analyzer espera
       
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || `HTTP ${res.status}`);
+      const mockCSV = `match;league;hour;status;home_avg_goals;away_avg_goals;home_attack;away_defense;away_attack;home_defense;btts_yes;btts_no;over_2_5_ft;under_2_5_ft;over_0_5_ht;under_0_5_ht;over_1_5_ft;under_1_5_ft;corners_ft_over_9_5;corners_ft_under_9_5
+"Flamengo x Vasco";"Brasileirão";"${todayDDMM} 20:00";"NS";2.5;2.0;3.0;1.5;2.8;1.8;2.25;1.61;1.95;1.85;1.35;3.00;1.40;2.85;1.85;5.10
+"Palmeiras x Corinthians";"Brasileirão";"${todayDDMM} 18:00";"NS";2.2;1.8;2.8;1.3;2.5;1.5;2.10;1.67;2.05;1.75;1.40;2.85;1.40;2.90;1.90;5.30
+"AC Milan x Inter";"Serie A";"${todayDDMM} 16:45";"NS";2.3;2.1;2.9;1.4;2.7;1.6;2.15;1.69;1.90;1.80;1.38;2.95;1.45;2.85;1.95;5.15
+"Barcelona x Real Madrid";"La Liga";"${todayDDMM} 21:00";"NS";2.8;2.4;3.2;1.2;3.0;1.4;2.40;1.54;2.20;1.65;1.50;2.60;1.30;3.10;1.35;2.95;5.20
+"Liverpool x Man City";"Premier League";"${todayDDMM} 17:30";"NS";2.6;2.3;3.1;1.3;2.9;1.5;2.35;1.57;2.15;1.70;1.45;2.75;1.35;2.80;1.85;5.25
+"Bayern x Dortmund";"Bundesliga";"${todayDDMM} 19:30";"NS";2.9;2.2;3.3;1.1;3.1;1.3;2.50;1.49;2.25;1.60;1.42;2.70;1.38;2.75;1.90;5.35`;
+      
+      addPoissonLog(`📊 Usando CSV mock com 6 jogos de alta qualidade para teste A/B...`);
+      addPoissonLog(`📅 Data usada: ${todayDDMM} (data do sistema)`);
+      addPoissonLog(`📊 CSV (primeiras linhas): ${mockCSV.split('\n').slice(0, 2).join(' | ')}`);
+      
+      // Testar analyzer diretamente primeiro
+      addPoissonLog(`🔍 Testando analyzer diretamente...`);
+      
+      // Capturar logs do console
+      const originalLog = console.log;
+      const capturedLogs: string[] = [];
+      console.log = (...args) => {
+        capturedLogs.push(args.join(' '));
+        originalLog(...args);
+      };
+      
+      const directResult = await analyzeLiveMultiplesAsync(mockCSV);
+      
+      // Restaurar console.log
+      console.log = originalLog;
+      
+      // Mostrar logs de qualidade
+      const qualityLogs = capturedLogs.filter(log => log.includes('[QUALITY]'));
+      if (qualityLogs.length > 0) {
+        addPoissonLog(`📊 Logs de qualidade do analyzer:`);
+        qualityLogs.forEach(log => addPoissonLog(`   ${log}`));
       }
       
-      const result = await res.json();
-      setOdds(result.oddsMap ?? {});
-      setUnmatchedGames(result.unmatched ?? []);
+      // Mostrar outros logs relevantes
+      const otherLogs = capturedLogs.filter(log => 
+        log.includes('jogos encontrados') || 
+        log.includes('jogos NS') || 
+        log.includes('jogos com qualidade')
+      );
+      if (otherLogs.length > 0) {
+        addPoissonLog(`📊 Logs do analyzer:`);
+        otherLogs.forEach(log => addPoissonLog(`   ${log}`));
+      }
       
-      const oddsCount = Object.keys(result.oddsMap ?? {}).length;
-      const unmatchedCount = (result.unmatched ?? []).length;
+      addPoissonLog(`📊 Analyzer direto: ${directResult?.suggestions?.length || 0} sugestões`);
       
-      alert(`✅ Odds reais buscadas com sucesso!\n📊 ${oddsCount} jogos com odds reais\n⚠️ ${unmatchedCount} jogos não encontrados na API\n\nVerifique o console para logs detalhados.`);
+      if (directResult?.suggestions?.length > 0) {
+        directResult.suggestions.slice(0, 2).forEach((s: any, i: number) => {
+          addPoissonLog(`   - Sugestão ${i+1}: ${s.match} | ${s.market}`);
+        });
+      }
       
-    } catch (e: any) {
-      alert("❌ Erro ao buscar odds: " + (e?.message ?? String(e)));
+      // Criar analyzer wrapper
+      const analyzer = { 
+        buildBingoSeguro: async (csvText: string) => {
+          const result = await analyzeLiveMultiplesAsync(csvText);
+          addPoissonLog(`📊 Wrapper chamado, retornando ${result?.suggestions?.length || 0} sugestões`);
+          return result;
+        }
+      };
+      
+      const testResults = await runPoissonABTest(analyzer, [mockCSV] as any);
+      setPoissonMetrics(testResults);
+      
+      addPoissonLog(`✅ Teste A/B concluído`);
+      addPoissonLog(`📊 Baseline: ${testResults.baseline?.selections?.length || 0} seleções`);
+      addPoissonLog(`📊 Assist: ${testResults.assist?.selections?.length || 0} seleções`);
+      addPoissonLog(`📊 Tie-breaker: ${testResults.tie_breaker?.selections?.length || 0} seleções`);
+      addPoissonLog(`📊 Strict: ${testResults.strict?.selections?.length || 0} seleções`);
+      
+      // Mostrar detalhes se houver seleções
+      if (testResults.baseline?.selections?.length > 0) {
+        addPoissonLog(`📊 Baseline odd total: ${testResults.baseline.combinedOdd || 'N/A'}`);
+        addPoissonLog(`📊 Baseline edge médio: ${testResults.baseline.expectedValue ? (testResults.baseline.expectedValue * 100).toFixed(1) + '%' : 'N/A'}`);
+      }
+      
+    } catch (error: unknown) {
+      const errorMsg = error instanceof Error ? error.message : 'Erro desconhecido';
+      addPoissonLog(`❌ Erro no teste A/B: ${errorMsg}`);
     } finally {
-      setLoadingOdds(false);
+      setPoissonTesting(false);
     }
+  };
+
+  const clearPoissonLogs = () => {
+    setPoissonLogs([]);
+    setPoissonMetrics(null);
   };
 
   // 🆕 Estados para fluxo unificado
@@ -96,6 +191,9 @@ export default function AdminPage() {
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
   const [isClient, setIsClient] = useState(false);
   const [testingSave, setTestingSave] = useState(false);
+  const [databaseInfo, setDatabaseInfo] = useState<any>(null);
+  const [databaseError, setDatabaseError] = useState<string>("");
+  const [successMessage, setSuccessMessage] = useState<string>("");
 
   // 🆕 Detectar se está no cliente
   useEffect(() => {
@@ -116,115 +214,41 @@ export default function AdminPage() {
     reader.readAsText(file);
   };
 
-  // 🆕 Handler de processamento completo
-  const handleProcessar = async () => {
+  // 🆕 Handler de processamento completo (importado do orchestration)
+  const processar = () => {
     if (!csvFile) return;
-    setProcessing(true);
-    try {
-      // a) Parse + save via hook (retorna count de jogos importados)
-      const saved = await importFromCSV(csvFile);
-      // b) Buscar odds (já existente)
-      const apiKey = localStorage.getItem('football-api-key') ?? '';
-      let withOdds = 0;
-      if (apiKey) {
-        withOdds = await enrichWithOdds(apiKey);
-      }
-      setProcessResult({ saved, withOdds });
-    } finally {
-      setProcessing(false);
-    }
+    handleProcessar(
+      csvFile,
+      setDatabaseInfo,
+      setDatabaseError,
+      setSuccessMessage,
+      setProcessing,
+      importFromCSV,
+      enrichWithOdds
+    );
   };
 
-  const handleClearDatabase = async () => {
-    if (!confirm("⚠️ ATENÇÃO: Isso limpará a base mantendo apenas os últimos 3 dias. Continuar?")) {
-      return;
-    }
-    
-    setClearing(true);
-    try {
-      console.log("[ADMIN] Iniciando limpeza da base de dados...");
-      await cleanupDatabase();
-      alert("✅ Base de dados limpa com sucesso! Mantidos apenas os últimos 3 dias.");
-    } catch (error) {
-      console.error("[ADMIN] Erro ao limpar banco:", error);
-      alert("❌ Erro ao limpar banco. Verifique o console.");
-    } finally {
-      setClearing(false);
-    }
+  // 🆕 Handler de limpeza de banco (importado do orchestration)
+  const clearDatabase = () => {
+    handleClearDatabase(setDatabaseInfo, setDatabaseError, setSuccessMessage);
   };
 
-  // 🆕 Função de backup e limpeza do Supabase
-  const cleanupDatabase = async () => {
-    // 1. Backup dos dados atuais
-    console.log("[CLEANUP] Fazendo backup dos dados...");
-    const { data: allData, error: fetchError } = await supabase
-      .from('bet_results')
-      .select('*')
-      .order('created_at', { ascending: false });
-    
-    if (fetchError) throw fetchError;
-    
-    // Salvar backup localmente
-    const backupData = {
-      timestamp: new Date().toISOString(),
-      totalRecords: allData?.length || 0,
-      records: allData
-    };
-    
-    const blob = new Blob([JSON.stringify(backupData, null, 2)], 
-      { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `bet_results_backup_${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    
-    console.log(`[CLEANUP] Backup salvo: ${backupData.totalRecords} registros`);
-    
-    // 2. Calcular data limite (3 dias atrás)
-    const threeDaysAgo = new Date();
-    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
-    const cutoffDate = threeDaysAgo.toISOString();
-    
-    // 3. Contar registros que serão removidos
-    const { count: oldCount, error: countError } = await supabase
-      .from('bet_results')
-      .select('*', { count: 'exact', head: true })
-      .lt('created_at', cutoffDate);
-    
-    if (countError) throw countError;
-    
-    console.log(`[CLEANUP] Serão removidos ${oldCount} registros anteriores a ${cutoffDate}`);
-    
-    // 4. Remover registros antigos
-    if (oldCount && oldCount > 0) {
-      const { error: deleteError } = await supabase
-        .from('bet_results')
-        .delete()
-        .lt('created_at', cutoffDate);
-      
-      if (deleteError) throw deleteError;
-      
-      console.log(`[CLEANUP] ✅ Removidos ${oldCount} registros antigos`);
-    }
-    
-    // 5. Verificar registros restantes
-    const { count: remainingCount, error: remainingError } = await supabase
-      .from('bet_results')
-      .select('*', { count: 'exact', head: true });
-    
-    if (remainingError) throw remainingError;
-    
-    console.log(`[CLEANUP] ✅ Restam ${remainingCount} registros (últimos 3 dias)`);
-    
-    return {
-      removed: oldCount,
-      remaining: remainingCount,
-      backupSaved: true
-    };
+  // 🆕 Wrapper functions para React events
+  const handleFetchRealOddsClick = () => {
+    handleFetchRealOdds(results, setOdds, setLoadingOdds, setOddsError);
+  };
+
+  const handleProcessarClick = () => {
+    if (!csvFile) return;
+    handleProcessar(
+      csvFile,
+      setDatabaseInfo,
+      setDatabaseError,
+      setSuccessMessage,
+      setProcessing,
+      importFromCSV,
+      enrichWithOdds
+    );
   };
 
   const handleSaveApiKey = () => {
@@ -360,7 +384,7 @@ export default function AdminPage() {
 
         {/* PASSO 2: Processar */}
         <button
-          onClick={handleProcessar}
+          onClick={handleProcessarClick}
           disabled={!csvFile || processing}
           style={{
             background: csvFile && !processing ? C.green : C.gray,
@@ -522,7 +546,7 @@ export default function AdminPage() {
           </div>
           
           <button
-            onClick={handleFetchRealOdds}
+            onClick={handleFetchRealOddsClick}
             disabled={loadingOdds}
             style={{
               background: loadingOdds ? C.gray : C.green,
@@ -655,6 +679,188 @@ export default function AdminPage() {
         </div>
       </div>
 
+      {/* 🧪 Poisson Experimental */}
+      <div style={{ background: C.card, border: `2px solid ${poissonExpanded ? '#f0c040' : C.border}`, borderRadius: "12px", padding: "24px", marginBottom: "24px" }}>
+        <div 
+          style={{ 
+            display: "flex", 
+            alignItems: "center", 
+            justifyContent: "space-between",
+            cursor: "pointer",
+            marginBottom: poissonExpanded ? "20px" : "0"
+          }}
+          onClick={() => setPoissonExpanded(!poissonExpanded)}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <Beaker size={20} color={poissonExpanded ? '#f0c040' : C.accent} />
+            <h2 style={{ fontSize: "18px", fontWeight: 600, margin: 0, color: poissonExpanded ? '#f0c040' : C.text }}>
+              🧪 Poisson Experimental
+            </h2>
+            {analyzerPatched && (
+              <span style={{
+                background: '#f0c040',
+                color: '#000',
+                padding: '2px 8px',
+                borderRadius: '4px',
+                fontSize: '11px',
+                fontWeight: 600
+              }}>
+                PATCHED
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: "12px", color: C.muted }}>
+            {poissonExpanded ? '▼' : '▶'}
+          </div>
+        </div>
+
+        {poissonExpanded && (
+          <>
+            {/* Seletor de Modo */}
+            <div style={{ marginBottom: "20px" }}>
+              <div style={{ fontSize: "14px", color: C.muted, marginBottom: "8px" }}>
+                Modo Poisson:
+              </div>
+              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                {(['off', 'assist', 'tie_breaker', 'strict'] as PoissonMode[]).map(mode => (
+                  <button
+                    key={mode}
+                    onClick={() => setPoissonMode(mode)}
+                    style={{
+                      padding: "6px 12px",
+                      background: poissonMode === mode ? '#f0c040' : C.gray,
+                      color: poissonMode === mode ? '#000' : C.text,
+                      border: "none",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      textTransform: "uppercase"
+                    }}
+                  >
+                    {mode}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Botões de Ação */}
+            <div style={{ display: "flex", gap: "12px", marginBottom: "20px", flexWrap: "wrap" }}>
+              <button
+                onClick={handleApplyPoissonPatch}
+                disabled={analyzerPatched}
+                style={{
+                  padding: "10px 16px",
+                  background: analyzerPatched ? C.gray : '#f0c040',
+                  color: analyzerPatched ? C.text : '#000',
+                  border: "none",
+                  borderRadius: "8px",
+                  cursor: analyzerPatched ? "not-allowed" : "pointer",
+                  fontSize: "13px",
+                  fontWeight: 600,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px"
+                }}
+              >
+                <RotateCcw size={14} />
+                {analyzerPatched ? 'Patch Aplicado' : 'Aplicar Patch Poisson'}
+              </button>
+
+              <button
+                onClick={handleRunPoissonABTest}
+                disabled={poissonTesting}
+                style={{
+                  padding: "10px 16px",
+                  background: poissonTesting ? C.gray : C.accent,
+                  color: "white",
+                  border: "none",
+                  borderRadius: "8px",
+                  cursor: poissonTesting ? "not-allowed" : "pointer",
+                  fontSize: "13px",
+                  fontWeight: 600,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px"
+                }}
+              >
+                <Play size={14} />
+                {poissonTesting ? 'Testando...' : 'Testar A/B Poisson'}
+              </button>
+            </div>
+
+            {/* Logs */}
+            {poissonLogs.length > 0 && (
+              <div style={{ marginBottom: "20px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                  <div style={{ fontSize: "14px", color: C.muted }}>
+                    Logs ({poissonLogs.length})
+                  </div>
+                  <button
+                    onClick={clearPoissonLogs}
+                    style={{
+                      padding: "4px 8px",
+                      background: C.gray,
+                      color: C.text,
+                      border: "none",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                      fontSize: "11px"
+                    }}
+                  >
+                    Limpar
+                  </button>
+                </div>
+                <div style={{
+                  background: '#0d1117',
+                  border: `1px solid ${C.border}`,
+                  borderRadius: "6px",
+                  padding: "12px",
+                  maxHeight: "200px",
+                  overflowY: "auto",
+                  fontFamily: 'monospace',
+                  fontSize: "11px",
+                  lineHeight: "1.4"
+                }}>
+                  {poissonLogs.map((log, index) => (
+                    <div key={index} style={{ color: '#8b949e', marginBottom: "2px" }}>
+                      {log}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Métricas */}
+            {poissonMetrics && (
+              <div>
+                <div style={{ fontSize: "14px", color: C.muted, marginBottom: "8px" }}>
+                  <BarChart3 size={14} style={{ display: 'inline', marginRight: '4px' }} />
+                  Métricas A/B:
+                </div>
+                <div style={{
+                  background: '#0d1117',
+                  border: `1px solid ${C.border}`,
+                  borderRadius: "6px",
+                  padding: "12px",
+                  fontFamily: 'monospace',
+                  fontSize: "11px",
+                  lineHeight: "1.4"
+                }}>
+                  {Object.entries(poissonMetrics).map(([mode, data]: [string, any]) => (
+                    <div key={mode} style={{ color: '#8b949e', marginBottom: "4px" }}>
+                      <span style={{ color: '#f0c040' }}>{mode.toUpperCase()}:</span> {data?.selections?.length || 0} seleções
+                      {data?.combinedOdd && ` | Odd: ${data.combinedOdd}`}
+                      {data?.expectedValue && ` | Edge: ${(data.expectedValue * 100).toFixed(1)}%`}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
       {/* Operações de Risco */}
       <div style={{ background: C.card, border: `2px solid ${C.red}`, borderRadius: "12px", padding: "24px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "20px" }}>
@@ -670,7 +876,7 @@ export default function AdminPage() {
           </div>
           
           <button
-            onClick={handleClearDatabase}
+            onClick={clearDatabase}
             disabled={clearing}
             style={{
               padding: "12px 24px",

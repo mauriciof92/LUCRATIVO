@@ -830,7 +830,10 @@ export default function MultipleAnalyzerPage() {
   const [sinfoniaIdx, setSinfoniaIdx] = useState(0);  // 🆕 Estado de navegação da Sinfonia
   
   // 🆕 Estado para filtro de data - abordagem segura para SSR
-  const [selectedDate, setSelectedDate] = useState<string>("0703"); // Default: 07/03 (hoje)
+  const [selectedDate, setSelectedDate] = useState<string>(() => {
+    const now = new Date();
+    return `${String(now.getDate()).padStart(2,'0')}${String(now.getMonth() + 1).padStart(2,'0')}`;
+  }); // Default: hoje (DDMM)
   const [localCsvText, setLocalCsvText] = useState<string>(""); // CSV da data selecionada
   const [csvDisponivel, setCsvDisponivel] = useState<boolean>(true); // 🆕 Fix 1: CSV disponível para data
   
@@ -883,7 +886,16 @@ export default function MultipleAnalyzerPage() {
     // 🆕 Só buscar no Supabase para datas diferentes de hoje
     async function loadCsvForDate() {
       console.log(`[CSV-DIARIO] Carregando CSV para data ${selectedDate} (diferente de hoje)`);
-      const csvText = await loadCsvDiario(selectedDate);
+      
+      // 🆕 Converter DDMM → YYYY-MM-DD para o Supabase
+      const currentYear = new Date().getFullYear();
+      const day = selectedDate.slice(0, 2);
+      const month = selectedDate.slice(2, 4);
+      const formattedDate = `${currentYear}-${month}-${day}`;
+      
+      console.log(`[CSV-DIARIO] Convertido: ${selectedDate} → ${formattedDate}`);
+      
+      const csvText = await loadCsvDiario(formattedDate);
       if (csvText) {
         setLocalCsvText(csvText);
         setCsvDisponivel(true);
@@ -891,7 +903,7 @@ export default function MultipleAnalyzerPage() {
       } else {
         setLocalCsvText("");
         setCsvDisponivel(false);
-        console.log(`[CSV-DIARIO] Nenhum CSV encontrado para data ${selectedDate}`);
+        console.log(`[CSV-DIARIO] Nenhum CSV encontrado para data ${formattedDate}`);
       }
     }
     loadCsvForDate();

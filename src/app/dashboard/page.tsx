@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { NavHeader } from "../../components/NavHeader";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { useBacktest, STAKE_FIXA } from "../../hooks/useBacktest";
+import { useDashboardMetrics } from "../../hooks/useDashboardMetrics";
 import { C, KPI as KpiCard, EmptyState, mktCat as catLabel } from "../../components/ui";
 
 type Period = 7 | 30 | 90;
@@ -13,48 +14,7 @@ export default function Dashboard() {
   const router = useRouter();
   const { results, loading } = useBacktest();
   const [period, setPeriod] = useState<Period>(30);
-
-  const filtered = useMemo(() => {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - period);
-    return results.filter(r => {
-      const d = new Date(r.created_at ?? r.hour ?? "");
-      return !isNaN(d.getTime()) && d >= cutoff;
-    });
-  }, [results, period]);
-
-  // PROPOSTO — "avg" e "no-odd" viram uma categoria explícita "não resolvido"
-  const confirmed = useMemo(() =>
-    filtered.filter(r => r.mainMarket.result === "win" || r.mainMarket.result === "lose"),
-    [filtered]
-  );
-  const unresolved = useMemo(() =>
-    filtered.filter(r => r.mainMarket.result === "avg" || r.mainMarket.result === "no-odd"),
-    [filtered]
-  );
-
-  const wins = confirmed.filter(r => r.mainMarket.result === "win").length;
-  const losses = confirmed.filter(r => r.mainMarket.result === "lose").length;
-  const hitRate = confirmed.length > 0 ? (wins / confirmed.length * 100) : 0;
-  const totalProfit = confirmed.reduce((acc, r) => acc + Number(r.mainMarket.profit || 0), 0);
-  const roi = confirmed.length > 0 ? (totalProfit / (confirmed.length * STAKE_FIXA) * 100) : 0;
-
-  const roiChart = useMemo(() => {
-    const sorted = [...confirmed].sort((a, b) =>
-      new Date(a.created_at ?? a.hour ?? "").getTime() - new Date(b.created_at ?? b.hour ?? "").getTime()
-    );
-    let cumulative = 0;
-    const byDay: Record<string, { profit: number }> = {};
-    sorted.forEach(r => {
-      const key = new Date(r.created_at ?? r.hour ?? "").toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
-      if (!byDay[key]) byDay[key] = { profit: 0 };
-      byDay[key].profit += Number(r.mainMarket.profit || 0);
-    });
-    return Object.entries(byDay).map(([date, v]) => {
-      cumulative += v.profit;
-      return { date, diario: Number(v.profit.toFixed(2)), acumulado: Number(cumulative.toFixed(2)) };
-    });
-  }, [confirmed]);
+  const { filtered, confirmed, unresolved, wins, losses, hitRate, totalProfit, roi, roiChart } = useDashboardMetrics(period);
 
   const byMarket = useMemo(() => {
     const map: Record<string, { wins: number; total: number; profit: number }> = {};
@@ -84,9 +44,9 @@ export default function Dashboard() {
         league, total: v.total, wins: v.wins,
         hitRate: v.total > 0 ? (v.wins / v.total * 100) : 0,
         profit: v.profit, roi: v.total > 0 ? (v.profit / (v.total * STAKE_FIXA) * 100) : 0,
-        classificacao: v.total >= 20 && v.wins/v.total >= 0.70 ? "🔥 ELITE" : v.total >= 10 && v.wins/v.total >= 0.60 ? "✅ FORTE" : v.total >= 5 && v.wins/v.total >= 0.50 ? "📊 MODERADO" : v.wins/v.total < 0.40 && v.total >= 5 ? "❌ EVITAR" : "⚠️ NEUTRO",
+        classificacao: v.total >= 20 && v.wins/v.total >= 0.70 ? " ELITE" : v.total >= 10 && v.wins/v.total >= 0.60 ? " FORTE" : v.total >= 5 && v.wins/v.total >= 0.50 ? " MODERADO" : v.wins/v.total < 0.40 && v.total >= 5 ? " EVITAR" : " NEUTRO",
       }))
-      .filter(l => l.total >= 3).sort((a, b) => b.hitRate - a.hitRate);
+      .filter(m => m.total >= 3).sort((a, b) => b.hitRate - a.hitRate);
   }, [confirmed]);
 
   return (

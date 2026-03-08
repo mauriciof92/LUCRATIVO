@@ -9,6 +9,7 @@ import { ProfileBadge, PoisonBadges, FavoritoBar, KPI as KpiCard, C, EmptyState 
 // Estado da data selecionada (default = hoje)
 const today = new Date();
 const todayStr = today.toISOString().split('T')[0];  // YYYY-MM-DD para o input
+const todayDDMM = todayStr.slice(8,10) + todayStr.slice(5,7);  // DDMM para o analyzer
 
 function GameCard({ game }: { game: any }) {
   const score = Math.round(Number(game.score ?? 0) * 100);
@@ -329,7 +330,7 @@ export default function PanoramaPage() {
   const { results, summary, loading, todayGames, lastCsvText } = useBacktest();
 
   // Estado da data selecionada (default = hoje)
-  const [selectedDate, setSelectedDate] = useState(todayStr);
+  const [selectedDate, setSelectedDate] = useState(todayDDMM);
   
   // Converter YYYY-MM-DD → DDMM para o analyzer
   const selectedDDMM = selectedDate.slice(8,10) + selectedDate.slice(5,7);
@@ -590,8 +591,20 @@ export default function PanoramaPage() {
               <span style={{ color: C.muted, fontSize: 13 }}>Data:</span>
               <input
                 type="date"
-                value={selectedDate}
-                onChange={e => setSelectedDate(e.target.value)}
+                value={(() => {
+                  // Converter DDMM para YYYY-MM-DD para o input
+                  if (!selectedDate || selectedDate.length !== 4) return todayStr;
+                  const day = selectedDate.slice(0, 2);
+                  const month = selectedDate.slice(2, 4);
+                  const year = new Date().getFullYear();
+                  return `${year}-${month}-${day}`;
+                })()}
+                onChange={e => {
+                  // Converter YYYY-MM-DD para DDMM para o estado
+                  const ymd = e.target.value;
+                  const ddmm = ymd.slice(8,10) + ymd.slice(5,7);
+                  setSelectedDate(ddmm);
+                }}
                 style={{
                   background: C.card,
                   color: C.text,

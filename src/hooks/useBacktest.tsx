@@ -758,6 +758,37 @@ export const useBacktest = () => {
   const hitRate = totalG + totalR > 0 ? (totalG / (totalG + totalR)) * 100 : 0;
   const hitRateInclAvg = (totalG + totalAvg + totalR) > 0 ? ((totalG + totalAvg) / (totalG + totalAvg + totalR)) * 100 : 0;
 
+  // 🆕 Métricas para backtest page
+  const confirmed = useMemo(() =>
+    results.filter(r => r.mainMarket.result === 'win' || r.mainMarket.result === 'lose'),
+    [results]
+  );
+  
+  const wins = useMemo(() =>
+    confirmed.filter(r => r.mainMarket.result === 'win').length,
+    [confirmed]
+  );
+  
+  const totalProfit = useMemo(() =>
+    confirmed.reduce((a, r) => a + Number(r.mainMarket.profit || 0), 0),
+    [confirmed]
+  );
+  
+  const roi = useMemo(() =>
+    confirmed.length > 0 ? (totalProfit / (confirmed.length * STAKE_FIXA)) * 100 : 0,
+    [confirmed, totalProfit]
+  );
+  
+  const hitRateMain = useMemo(() =>
+    confirmed.length > 0 ? (wins / confirmed.length * 100) : 0,
+    [confirmed, wins]
+  );
+  
+  const leagues = useMemo(() =>
+    Array.from(new Set(results.map(r => r.league).filter(Boolean))).sort(),
+    [results]
+  );
+
   const filtered = results.filter(r => {
     const hasPendingManual = r.mainMarket.result === "pending_manual" || r.combo.some((b: any) => b.result === "pending_manual");
     return filter === "all" ? true : [r.mainMarket, ...r.combo].some((b: any) => b.result === filter);
@@ -812,6 +843,14 @@ export const useBacktest = () => {
     hitRate,
     hitRateInclAvg,
     filtered,
+    
+    // 🆕 Métricas para backtest page
+    confirmed,
+    wins,
+    totalProfit,
+    roi,
+    hitRateMain,
+    leagues,
     
     // Componentes
     Badge,

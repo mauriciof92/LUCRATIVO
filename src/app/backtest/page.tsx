@@ -6,25 +6,10 @@ import { NavHeader } from '../../components/NavHeader';
 import { Badge, KPI, TH, TD, C, ProfileBadge, PoisonBadges, FavoritoBar, SectionBox, EmptyState, mktCat } from '../../components/ui';
 
 export default function BacktestPage() {
-  const { results, summary, loading, filter, setFilter } = useBacktest();
+  const { results, summary, loading, filter, setFilter, confirmed, wins, totalProfit, roi, hitRateMain, leagues } = useBacktest();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filterLeague, setFilterLeague] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
-
-  const confirmed = useMemo(() =>
-    results.filter(r => r.mainMarket.result === 'win' || r.mainMarket.result === 'lose'),
-    [results]
-  );
-
-  const wins = confirmed.filter(r => r.mainMarket.result === 'win').length;
-  const totalProfit = confirmed.reduce((a, r) => a + Number(r.mainMarket.profit || 0), 0);
-  const roi = confirmed.length > 0 ? (totalProfit / (confirmed.length * STAKE_FIXA) * 100) : 0;
-  const hitRate = confirmed.length > 0 ? (wins / confirmed.length * 100) : 0;
-
-  const leagues = useMemo(() =>
-    Array.from(new Set(results.map(r => r.league).filter(Boolean))).sort(),
-    [results]
-  );
 
   const filtered = useMemo(() => {
     let list = [...results];
@@ -45,14 +30,14 @@ export default function BacktestPage() {
         <div style={{ marginBottom: 24 }}>
           <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>📋 Histórico de Apostas</h1>
           <p style={{ color: C.muted, marginTop: 4, fontSize: 14 }}>
-            {confirmed.length} confirmadas · {results.length - confirmed.length} pendentes
+            {confirmed.length} confirmadas · {results.length - confirmed.length} pendentes · {hitRateMain.toFixed(1)}% hit rate
           </p>
         </div>
 
         {/* KPIs */}
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 24 }}>
           <KPI label="Apostas" value={String(confirmed.length)} sub={`de ${results.length} jogos`} />
-          <KPI label="Hit Rate" value={`${hitRate.toFixed(1)}%`} sub={`${wins}W / ${confirmed.length - wins}L`} color={hitRate >= 55 ? C.green : C.red} />
+          <KPI label="Hit Rate" value={`${hitRateMain.toFixed(1)}%`} sub={`${wins}W / ${confirmed.length - wins}L`} color={hitRateMain >= 55 ? C.green : C.red} />
           <KPI label="ROI" value={`${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%`} color={roi >= 0 ? C.green : C.red} />
           <KPI label="Lucro" value={`R$ ${totalProfit.toFixed(2)}`} color={totalProfit >= 0 ? C.green : C.red} />
         </div>
