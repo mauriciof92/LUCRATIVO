@@ -69,7 +69,7 @@ export function updateABTestResult(
 }
 
 // Função para analisar performance A/B
-export function analyzeABTestPerformance(): {
+export function analyzeABTestPerformance(): Record<string, any> {
   const metrics = getABTestMetrics();
   
   const byMode = metrics.reduce((acc, m) => {
@@ -79,7 +79,7 @@ export function analyzeABTestPerformance(): {
         selected: 0,
         wins: 0,
         profit: 0,
-        stake: 25 * m.selected,
+        stake: 25,
         avgEdge: 0,
         avgScoreBase: 0,
         avgScoreFinal: 0,
@@ -104,7 +104,7 @@ export function analyzeABTestPerformance(): {
   Object.keys(byMode).forEach(mode => {
     const data = byMode[mode];
     data.hitRate = data.selected > 0 ? (data.wins / data.selected) * 100 : 0;
-    data.roi = data.profit > 0 ? (data.profit / (data.stake * data.selected)) * 100 : 0;
+    data.roi = data.selected > 0 ? (data.profit / (data.stake * data.selected)) * 100 : 0;
     data.avgEdge = data.selected > 0 ? data.avgEdge / data.selected : 0;
     data.avgScoreBase = data.selected > 0 ? data.avgScoreBase / data.selected : 0;
     data.avgScoreFinal = data.selected > 0 ? data.avgScoreFinal / data.selected : 0;
