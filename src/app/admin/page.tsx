@@ -11,6 +11,9 @@ import { analyzeLiveMultiplesAsync } from "../../lib/pre-live-multiple-analyzer"
 import { patchAnalyzerWithPoisson } from "../../lib/poisson-ab-test";
 import { runPoissonABTest } from "../../lib/poisson-test-runner";
 import { PoissonMode } from "../../lib/poisson-capsule";
+import { mapToDecisionGame } from "../../lib/decision-game-mapper";
+import { DecisionGame } from "../../types/decision-game";
+import { calculateMetricsByDominantReading, calculateCoherenceMetrics, DecisionGameMetrics, CoherenceMetrics, ReadingStatus } from "../../lib/decision-game-analytics";
 
 import { C, KPI as SharedKPI } from "../../components/ui";
 
@@ -52,6 +55,25 @@ export default function AdminPage() {
   const [poissonMetrics, setPoissonMetrics] = useState<any>(null);
   const [analyzerPatched, setAnalyzerPatched] = useState(false);
 
+  // 🆕 Estados DecisionGame (Camada 2 - Mapa de Decisão)
+  const [decisionGames, setDecisionGames] = useState<DecisionGame[]>([]);
+  const [decisionMetrics, setDecisionMetrics] = useState<DecisionGameMetrics[]>([]);
+  const [coherenceMetrics, setCoherenceMetrics] = useState<CoherenceMetrics | null>(null);
+
+  // 🆕 Converter resultados existentes para DecisionGame (apenas visualização Admin)
+  useEffect(() => {
+    if (results.length > 0) {
+      const decisions = results.map((result, index) => mapToDecisionGame(result, index));
+      setDecisionGames(decisions);
+      
+      // 🆕 Calcular métricas históricas
+      const metrics = calculateMetricsByDominantReading(decisions);
+      const coherence = calculateCoherenceMetrics(decisions);
+      setDecisionMetrics(metrics);
+      setCoherenceMetrics(coherence);
+    }
+  }, [results]);
+
   // 🆕 Handler para buscar odds reais (importado do orchestration)
   const fetchRealOdds = () => {
     handleFetchRealOdds(results, setOdds, setLoadingOdds, setOddsError);
@@ -76,96 +98,88 @@ export default function AdminPage() {
     }
   };
 
-  const handleRunPoissonABTest = async () => {
+  const handleDebugPoissonReal = async () => {
     setPoissonTesting(true);
     try {
-      addPoissonLog(`🧪 Iniciando teste A/B Poisson completo...`);
+      addPoissonLog(`🔍 Iniciando debug com entrada bruta do sistema...`);
       
-      // Criar CSV mock para teste A/B
-      const today = new Date();
-      const todayDDMM = `08-03-2026`; // Forçar data que o analyzer espera
+      // 📊 Usar mesma entrada bruta do fluxo real (ordem corrigida)
+      let csvText: string | null = null;
+      let dataSource = '';
       
-      const mockCSV = `match;league;hour;status;home_avg_goals;away_avg_goals;home_attack;away_defense;away_attack;home_defense;btts_yes;btts_no;over_2_5_ft;under_2_5_ft;over_0_5_ht;under_0_5_ht;over_1_5_ft;under_1_5_ft;corners_ft_over_9_5;corners_ft_under_9_5
+      // Prioridade 1: lastCsvText (localStorage)
+      const lastCsv = localStorage.getItem('lucrativo-last-csv') || '';
+      if (lastCsv) {
+        dataSource = 'lastCsvText (localStorage)';
+        csvText = lastCsv;
+        addPoissonLog(`📊 Fonte: ${dataSource} - ${lastCsv.split('\n').length} linhas`);
+      }
+      // Prioridade 2: mock separado
+      else {
+        dataSource = 'mock separado';
+        const todayDDMM = `08-03-2026`;
+        csvText = `match;league;hour;status;home_avg_goals;away_avg_goals;home_attack;away_defense;away_attack;home_defense;btts_yes;btts_no;over_2_5_ft;under_2_5_ft;over_0_5_ht;under_0_5_ht;over_1_5_ft;under_1_5_ft;corners_ft_over_9_5;corners_ft_under_9_5
 "Flamengo x Vasco";"Brasileirão";"${todayDDMM} 20:00";"NS";2.5;2.0;3.0;1.5;2.8;1.8;2.25;1.61;1.95;1.85;1.35;3.00;1.40;2.85;1.85;5.10
-"Palmeiras x Corinthians";"Brasileirão";"${todayDDMM} 18:00";"NS";2.2;1.8;2.8;1.3;2.5;1.5;2.10;1.67;2.05;1.75;1.40;2.85;1.40;2.90;1.90;5.30
-"AC Milan x Inter";"Serie A";"${todayDDMM} 16:45";"NS";2.3;2.1;2.9;1.4;2.7;1.6;2.15;1.69;1.90;1.80;1.38;2.95;1.45;2.85;1.95;5.15
-"Barcelona x Real Madrid";"La Liga";"${todayDDMM} 21:00";"NS";2.8;2.4;3.2;1.2;3.0;1.4;2.40;1.54;2.20;1.65;1.50;2.60;1.30;3.10;1.35;2.95;5.20
-"Liverpool x Man City";"Premier League";"${todayDDMM} 17:30";"NS";2.6;2.3;3.1;1.3;2.9;1.5;2.35;1.57;2.15;1.70;1.45;2.75;1.35;2.80;1.85;5.25
-"Bayern x Dortmund";"Bundesliga";"${todayDDMM} 19:30";"NS";2.9;2.2;3.3;1.1;3.1;1.3;2.50;1.49;2.25;1.60;1.42;2.70;1.38;2.75;1.90;5.35`;
-      
-      addPoissonLog(`📊 Usando CSV mock com 6 jogos de alta qualidade para teste A/B...`);
-      addPoissonLog(`📅 Data usada: ${todayDDMM} (data do sistema)`);
-      addPoissonLog(`📊 CSV (primeiras linhas): ${mockCSV.split('\n').slice(0, 2).join(' | ')}`);
-      
-      // Testar analyzer diretamente primeiro
-      addPoissonLog(`🔍 Testando analyzer diretamente...`);
-      
-      // Capturar logs do console
-      const originalLog = console.log;
-      const capturedLogs: string[] = [];
-      console.log = (...args) => {
-        capturedLogs.push(args.join(' '));
-        originalLog(...args);
-      };
-      
-      const directResult = await analyzeLiveMultiplesAsync(mockCSV);
-      
-      // Restaurar console.log
-      console.log = originalLog;
-      
-      // Mostrar logs de qualidade
-      const qualityLogs = capturedLogs.filter(log => log.includes('[QUALITY]'));
-      if (qualityLogs.length > 0) {
-        addPoissonLog(`📊 Logs de qualidade do analyzer:`);
-        qualityLogs.forEach(log => addPoissonLog(`   ${log}`));
+"Palmeiras x Corinthians";"Brasileirão";"${todayDDMM} 18:00";"NS";2.2;1.8;2.8;1.3;2.5;1.5;2.10;1.67;2.05;1.75;1.40;2.85;1.40;2.90;1.90;5.30`;
+        addPoissonLog(`📊 Fonte: ${dataSource} - ${csvText.split('\n').length} linhas`);
       }
       
-      // Mostrar outros logs relevantes
-      const otherLogs = capturedLogs.filter(log => 
-        log.includes('jogos encontrados') || 
-        log.includes('jogos NS') || 
-        log.includes('jogos com qualidade')
-      );
-      if (otherLogs.length > 0) {
-        addPoissonLog(`📊 Logs do analyzer:`);
-        otherLogs.forEach(log => addPoissonLog(`   ${log}`));
+      if (!csvText) {
+        addPoissonLog(`❌ Nenhum CSV bruto disponível`);
+        return;
       }
       
-      addPoissonLog(`📊 Analyzer direto: ${directResult?.suggestions?.length || 0} sugestões`);
+      // 📊 Log da estrutura bruta (primeiras linhas)
+      const lines = csvText.split('\n');
+      addPoissonLog(`📊 Estrutura CSV (primeiras 3 linhas):`);
+      lines.slice(0, 3).forEach((line, i) => {
+        addPoissonLog(`   Linha ${i}: ${line}`);
+      });
       
-      if (directResult?.suggestions?.length > 0) {
-        directResult.suggestions.slice(0, 2).forEach((s: any, i: number) => {
-          addPoissonLog(`   - Sugestão ${i+1}: ${s.match} | ${s.market}`);
-        });
-      }
-      
-      // Criar analyzer wrapper
+      // Criar analyzer wrapper (contrato padronizado)
       const analyzer = { 
-        buildBingoSeguro: async (csvText: string) => {
-          const result = await analyzeLiveMultiplesAsync(csvText);
-          addPoissonLog(`📊 Wrapper chamado, retornando ${result?.suggestions?.length || 0} sugestões`);
-          return result;
+        buildBingoSeguro: async (input: string | string[]) => {
+          // Contrato padronizado: aceita string OU string[]
+          const csvInput = Array.isArray(input) ? input[0] : input;
+          return await analyzeLiveMultiplesAsync(csvInput);
         }
       };
       
-      const testResults = await runPoissonABTest(analyzer, [mockCSV] as any);
+      // Rodar teste A/B com logs estruturados
+      const testResults = await runPoissonABTest(analyzer, [csvText]);
       setPoissonMetrics(testResults);
       
-      addPoissonLog(`✅ Teste A/B concluído`);
-      addPoissonLog(`📊 Baseline: ${testResults.baseline?.selections?.length || 0} seleções`);
-      addPoissonLog(`📊 Assist: ${testResults.assist?.selections?.length || 0} seleções`);
-      addPoissonLog(`📊 Tie-breaker: ${testResults.tie_breaker?.selections?.length || 0} seleções`);
-      addPoissonLog(`📊 Strict: ${testResults.strict?.selections?.length || 0} seleções`);
-      
-      // Mostrar detalhes se houver seleções
-      if (testResults.baseline?.selections?.length > 0) {
-        addPoissonLog(`📊 Baseline odd total: ${testResults.baseline.combinedOdd || 'N/A'}`);
-        addPoissonLog(`📊 Baseline edge médio: ${testResults.baseline.expectedValue ? (testResults.baseline.expectedValue * 100).toFixed(1) + '%' : 'N/A'}`);
+      // Mostrar logs estruturados
+      if (testResults.structuredLogs) {
+        const logs = testResults.structuredLogs;
+        addPoissonLog(`\n📊 === RESUMO ESTRUTURADO ===`);
+        addPoissonLog(`📊 Fonte de dados: ${dataSource}`);
+        addPoissonLog(`📊 Jogos recebidos: ${logs.gamesReceived}`);
+        addPoissonLog(`✅ Jogos válidos: ${logs.gamesValid}`);
+        addPoissonLog(`🎯 Candidatos gerados: ${logs.candidatesGenerated}`);
+        addPoissonLog(`✅ Candidatos aprovados: ${logs.candidatesApproved}`);
+        addPoissonLog(`🎯 Seleções finais: ${logs.finalSelections}`);
+        
+        if (Object.keys(logs.rejectedReasons).length > 0) {
+          addPoissonLog(`❌ Motivos de descarte:`);
+          Object.entries(logs.rejectedReasons).forEach(([reason, count]) => {
+            addPoissonLog(`   - ${reason}: ${count}`);
+          });
+        }
       }
+      
+      // 📊 Fallback de inspeção (results apenas para visualização)
+      if (results.length > 0) {
+        addPoissonLog(`\n📊 === INSPEÇÃO RESULTS (apenas visual) ===`);
+        addPoissonLog(`📊 Results disponíveis: ${results.length}`);
+        addPoissonLog(`📊 Estrutura do primeiro result: ${Object.keys(results[0]).join(', ')}`);
+      }
+      
+      addPoissonLog(`✅ Debug com entrada bruta concluído`);
       
     } catch (error: unknown) {
       const errorMsg = error instanceof Error ? error.message : 'Erro desconhecido';
-      addPoissonLog(`❌ Erro no teste A/B: ${errorMsg}`);
+      addPoissonLog(`❌ Erro no debug: ${errorMsg}`);
     } finally {
       setPoissonTesting(false);
     }
@@ -768,11 +782,11 @@ export default function AdminPage() {
               </button>
 
               <button
-                onClick={handleRunPoissonABTest}
+                onClick={handleDebugPoissonReal}
                 disabled={poissonTesting}
                 style={{
                   padding: "10px 16px",
-                  background: poissonTesting ? C.gray : C.accent,
+                  background: "#3fb950",
                   color: "white",
                   border: "none",
                   borderRadius: "8px",
@@ -784,8 +798,8 @@ export default function AdminPage() {
                   gap: "8px"
                 }}
               >
-                <Play size={14} />
-                {poissonTesting ? 'Testando...' : 'Testar A/B Poisson'}
+                <BarChart3 size={14} />
+                {poissonTesting ? 'Debugging...' : 'Debug (Entrada Bruta)'}
               </button>
             </div>
 
@@ -860,6 +874,155 @@ export default function AdminPage() {
           </>
         )}
       </div>
+
+      {/* 🆕 DecisionGame Analytics (Camada 4 - Validação Histórica) */}
+      {decisionMetrics.length > 0 && (
+        <div style={{ background: C.card, border: `2px solid ${C.accent}`, borderRadius: "12px", padding: "24px", marginBottom: "20px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+            <BarChart3 size={20} color={C.accent} />
+            <h3 style={{ fontSize: "16px", fontWeight: 600, margin: 0, color: C.accent }}>
+              DecisionGame Analytics (Camada 4)
+            </h3>
+          </div>
+          
+          <div style={{ fontSize: "12px", color: C.muted, marginBottom: "12px" }}>
+            📊 Métricas históricas por dominantReading - validação sem alterar produção
+          </div>
+          
+          {/* Métricas de Coerência */}
+          {coherenceMetrics && (
+            <div style={{ background: "#f8f9fa", padding: "12px", borderRadius: "8px", marginBottom: "16px" }}>
+              <div style={{ fontWeight: 600, marginBottom: "8px", fontSize: "13px" }}>
+                🎯 Coerência dominantReading vs mainMarket
+              </div>
+              <div style={{ fontSize: "11px", color: "#6c757d", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "8px" }}>
+                <div>Total: {coherenceMetrics.totalJogos}</div>
+                <div>Compatíveis: {coherenceMetrics.jogosCompativeis}</div>
+                <div>Fallback: {coherenceMetrics.jogosFallback}</div>
+                <div style={{ color: coherenceMetrics.coerenciaPercentual >= 70 ? '#28a745' : '#dc3545' }}>
+                  Coerência: {coherenceMetrics.coerenciaPercentual.toFixed(1)}%
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* Métricas por dominantReading com triagem operacional */}
+          <div style={{ display: "grid", gap: "8px" }}>
+            {decisionMetrics.slice(0, 5).map((metric, i) => (
+              <div key={i} style={{ 
+                background: "#f8f9fa", 
+                padding: "12px", 
+                borderRadius: "8px",
+                border: `1px solid ${
+                  metric.status === 'approved' ? '#28a745' : 
+                  metric.status === 'blocked' ? '#dc3545' : 
+                  '#ffc107'
+                }`
+              }}>
+                <div style={{ 
+                  fontWeight: 600, 
+                  marginBottom: "4px", 
+                  fontSize: "13px", 
+                  color: C.accent,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center"
+                }}>
+                  <span>{metric.dominantReading.toUpperCase()}</span>
+                  <span style={{
+                    fontSize: "11px",
+                    padding: "2px 6px",
+                    borderRadius: "4px",
+                    background: 
+                      metric.status === 'approved' ? '#28a745' : 
+                      metric.status === 'blocked' ? '#dc3545' : 
+                      '#ffc107',
+                    color: "white"
+                  }}>
+                    {metric.status.toUpperCase()}
+                  </span>
+                </div>
+                <div style={{ fontSize: "11px", color: "#6c757d", display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: "8px", marginBottom: "4px" }}>
+                  <div>Amostra: {metric.amostra}</div>
+                  <div>Hit Rate: {metric.hitRate.toFixed(1)}%</div>
+                  <div style={{ color: metric.roi >= 0 ? '#28a745' : '#dc3545' }}>
+                    ROI: {metric.roi.toFixed(1)}%
+                  </div>
+                  <div>Odd Média: {metric.oddMedia.toFixed(2)}</div>
+                  <div>Fallback: {metric.fallback.toFixed(1)}%</div>
+                  <div style={{ 
+                    color: metric.amostra < 5 ? '#dc3545' : '#6c757d',
+                    fontWeight: metric.amostra < 5 ? 600 : 400
+                  }}>
+                    {metric.amostra < 5 ? '⚠️ Amostra baixa' : 'OK'}
+                  </div>
+                </div>
+                <div style={{ 
+                  fontSize: "10px", 
+                  color: "#8b949e", 
+                  fontStyle: "italic",
+                  borderTop: "1px solid #e9ecef",
+                  paddingTop: "4px"
+                }}>
+                  {metric.motivo}
+                </div>
+              </div>
+            ))}
+          </div>
+          
+          {decisionMetrics.length > 5 && (
+            <div style={{ fontSize: "11px", color: C.muted, marginTop: "8px", textAlign: "center" }}>
+              ...mais {decisionMetrics.length - 5} dominantReadings
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 🆕 DecisionGame Debug (Camada 2 - Mapa de Decisão) */}
+      {decisionGames.length > 0 && (
+        <div style={{ background: C.card, border: `2px solid ${C.accent}`, borderRadius: "12px", padding: "24px", marginBottom: "20px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+            <BarChart3 size={20} color={C.accent} />
+            <h3 style={{ fontSize: "16px", fontWeight: 600, margin: 0, color: C.accent }}>
+              DecisionGame Debug (Camada 2)
+            </h3>
+          </div>
+          
+          <div style={{ fontSize: "12px", color: C.muted, marginBottom: "12px" }}>
+            📊 Objeto canônico derivado de BetResult - apenas visualização Admin
+          </div>
+          
+          <div style={{ display: "grid", gap: "8px" }}>
+            {decisionGames.slice(0, 3).map((game, i) => (
+              <div key={i} style={{ 
+                background: "#f8f9fa", 
+                padding: "12px", 
+                borderRadius: "8px",
+                border: "1px solid #e9ecef"
+              }}>
+                <div style={{ fontWeight: 600, marginBottom: "4px", fontSize: "13px" }}>
+                  {game.context.match}
+                </div>
+                <div style={{ fontSize: "11px", color: "#6c757d", lineHeight: "1.4" }}>
+                  <div>📊 Leitura: <span style={{ color: C.accent }}>{game.dominantReading}</span></div>
+                  <div>🎯 Mercado: {game.mainMarket.market} (Odd: {game.mainMarket.odd})</div>
+                  <div>💡 Explicação: {game.explanationShort}</div>
+                  <div>📈 Score: {game.debugMeta.originalScore} | Conf: {game.debugMeta.originalConfidence}%</div>
+                  <div>🔍 ProductFit: 
+                    {Object.entries(game.productFit).filter(([_, v]) => v).map(([k]) => k).join(', ') || 'Nenhum'}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          
+          {decisionGames.length > 3 && (
+            <div style={{ fontSize: "11px", color: C.muted, marginTop: "8px", textAlign: "center" }}>
+              ...mais {decisionGames.length - 3} jogos
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Operações de Risco */}
       <div style={{ background: C.card, border: `2px solid ${C.red}`, borderRadius: "12px", padding: "24px" }}>

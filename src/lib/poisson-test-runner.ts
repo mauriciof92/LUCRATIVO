@@ -130,41 +130,120 @@ export function testPoissonIntegration(analyzer: any, games: any[], mode: Poisso
 }
 
 // Função para executar teste A/B completo
-export async function runPoissonABTest(analyzer: any, games: any[]) {
+export async function runPoissonABTest(analyzer: any, input: string[]) {
   console.log(`🧪 [A/B-TEST] Iniciando teste A/B Poisson completo...`);
+  
+  // 📊 Extrair CSV text do input (contrato padronizado)
+  const csvText = Array.isArray(input) ? input[0] : input;
+  
+  // 📊 Logs estruturados antes do A/B
+  const structuredLogs = {
+    gamesReceived: csvText ? csvText.split('\n').length - 1 : 0, // -1 para remover header
+    gamesValid: 0,
+    candidatesGenerated: 0,
+    candidatesApproved: 0,
+    finalSelections: 0,
+    rejectedReasons: {} as Record<string, number>,
+    inputType: typeof input
+  };
+  
+  console.log(`📊 [A/B-TEST] === ANÁLISE PRÉVIA ===`);
+  console.log(`📊 [A/B-TEST] Jogos recebidos: ${structuredLogs.gamesReceived}`);
+  console.log(`📊 [A/B-TEST] Tipo de entrada: ${structuredLogs.inputType}`);
+  console.log(`📊 [A/B-TEST] CSV lines: ${csvText ? csvText.split('\n').length : 0}`);
+  
+  if (csvText) {
+    const lines = csvText.split('\n');
+    console.log(`📊 [A/B-TEST] Header: ${lines[0]}`);
+    if (lines.length > 1) {
+      console.log(`📊 [A/B-TEST] Primeira linha: ${lines[1]}`);
+    }
+  }
   
   const results: any = {};
   
-  // Testar baseline (off)
+  // Testar baseline (off) com análise detalhada
   console.log(`\n📊 [A/B-TEST] === BASELINE (OFF) ===`);
-  const testOff = testPoissonIntegration(analyzer, games, 'off');
-  results.baseline = await analyzer.buildBingoSeguro(games);
-  testOff.restore();
   
-  // Testar assist
-  console.log(`\n📊 [A/B-TEST] === ASSIST ===`);
-  const testAssist = testPoissonIntegration(analyzer, games, 'assist');
-  results.assist = await analyzer.buildBingoSeguro(games);
-  testAssist.restore();
+  try {
+    const baselineResult = await analyzer.buildBingoSeguro(input);
+    
+    // 📊 Análise estruturada do resultado
+    const selections = baselineResult?.selections || baselineResult?.suggestions || [];
+    structuredLogs.finalSelections = selections.length;
+    
+    console.log(`✅ [A/B-TEST] Baseline gerado com sucesso`);
+    console.log(`📊 [A/B-TEST] Seleções finais: ${structuredLogs.finalSelections}`);
+    
+    if (selections.length > 0) {
+      selections.slice(0, 3).forEach((s: any, i: number) => {
+        console.log(`📊 [A/B-TEST] Seleção ${i+1}: ${s.match} | ${s.market} | Odd: ${s.odd}`);
+      });
+    } else {
+      console.log(`❌ [A/B-TEST] PROBLEMA: Baseline gerou 0 seleções!`);
+      
+      // Tentar entender o motivo
+      if (baselineResult?.summary) {
+        console.log(`📊 [A/B-TEST] Summary:`, baselineResult.summary);
+        structuredLogs.gamesValid = baselineResult.summary.totalGames || 0;
+        structuredLogs.candidatesGenerated = baselineResult.summary.qualityGames || 0;
+      }
+      
+      if (baselineResult?.games) {
+        console.log(`📊 [A/B-TEST] Total games processados: ${baselineResult.games.length}`);
+        baselineResult.games.forEach((g: any, i: number) => {
+          if (i < 3) {
+            console.log(`📊 [A/B-TEST] Jogo ${i+1}: ${g.match} | Score: ${g.score} | Conf: ${g.confidence}`);
+          }
+        });
+      }
+      
+      structuredLogs.rejectedReasons['no_baseline_selections'] = 1;
+    }
+    
+    results.baseline = baselineResult;
+    
+  } catch (error) {
+    console.error(`❌ [A/B-TEST] Erro no baseline:`, error);
+    structuredLogs.rejectedReasons['baseline_error'] = 1;
+    results.baseline = null;
+  }
   
-  // Testar tie_breaker
-  console.log(`\n📊 [A/B-TEST] === TIE_BREAKER ===`);
-  const testTieBreaker = testPoissonIntegration(analyzer, games, 'tie_breaker');
-  results.tie_breaker = await analyzer.buildBingoSeguro(games);
-  testTieBreaker.restore();
+  // 📊 Resumo estruturado
+  console.log(`\n📊 [A/B-TEST] === RESUMO ESTRUTURADO ===`);
+  console.log(`📊 Jogos recebidos: ${structuredLogs.gamesReceived}`);
+  console.log(`📊 Tipo entrada: ${structuredLogs.inputType}`);
+  console.log(`✅ Jogos válidos: ${structuredLogs.gamesValid}`);
+  console.log(`🎯 Candidatos gerados: ${structuredLogs.candidatesGenerated}`);
+  console.log(`✅ Candidatos aprovados: ${structuredLogs.candidatesApproved}`);
+  console.log(`🎯 Seleções finais: ${structuredLogs.finalSelections}`);
   
-  // Testar strict
-  console.log(`\n📊 [A/B-TEST] === STRICT ===`);
-  const testStrict = testPoissonIntegration(analyzer, games, 'strict');
-  results.strict = await analyzer.buildBingoSeguro(games);
-  testStrict.restore();
+  if (Object.keys(structuredLogs.rejectedReasons).length > 0) {
+    console.log(`❌ Motivos de descarte:`, structuredLogs.rejectedReasons);
+  }
+  
+  // Testar outros modos apenas se baseline tiver seleções
+  if (structuredLogs.finalSelections === 0) {
+    console.log(`❌ [A/B-TEST] Pulando outros modos - baseline sem seleções`);
+    return { ...results, structuredLogs };
+  }
+  
+  // Testar outros modos
+  const modes = ['assist', 'tie_breaker', 'strict'];
+  
+  for (const mode of modes) {
+    console.log(`\n📊 [A/B-TEST] === ${mode.toUpperCase()} ===`);
+    const testMode = testPoissonIntegration(analyzer, input, mode as PoissonMode);
+    results[mode] = await analyzer.buildBingoSeguro(input);
+    testMode.restore();
+  }
   
   // Comparação
   console.log(`\n📈 [A/B-TEST] === COMPARAÇÃO ===`);
   const comparison = compareResults(results);
   console.log(comparison);
   
-  return { ...results, comparison };
+  return { ...results, structuredLogs, comparison };
 }
 
 // Função para comparar resultados
