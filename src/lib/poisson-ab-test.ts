@@ -1,6 +1,7 @@
 // 🧪 EXEMPLO DE USO - INTEGRAÇÃO POISSON NO ANALYZER
 
-import { integratePoissonInBuildBingoSeguro, PoissonMode } from './bingo-seguro-poisson-integration';
+import { integratePoissonInBuildBingoSeguro } from './bingo-seguro-poisson-integration';
+import { PoissonMode } from './poisson-capsule';
 
 // 🎯 CONFIGURAÇÃO DO TESTE A/B
 export class PoissonABTest {
@@ -35,7 +36,8 @@ export class PoissonABTest {
       baseline: await this.enhancedVersions.get('off')!(games),
       assist: await this.enhancedVersions.get('assist')!(games),
       tie_breaker: await this.enhancedVersions.get('tie_breaker')!(games),
-      strict: await this.enhancedVersions.get('strict')!(games)
+      strict: await this.enhancedVersions.get('strict')!(games),
+      comparison: null // será preenchido abaixo
     };
     
     // Comparação

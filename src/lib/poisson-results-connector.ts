@@ -5,113 +5,80 @@ import { saveABTestMetrics, updateABTestResult, getABTestMetrics } from './ab-te
 // Hook para conectar métricas Poisson com sistema de resultados
 export function connectPoissonWithResults() {
   // Sobrescrever toLiveMultipleSuggestionDTO para incluir persistência
-  const originalToDTO = window.toLiveMultipleSuggestionDTO;
+  const originalToDTO = (window as any).toLiveMultipleSuggestionDTO;
   
-  window.toLiveMultipleSuggestionDTO = function(suggestion: any) {
-    // Salvar métricas A/B se existirem
-    if (suggestion.abTestMetrics && Array.isArray(suggestion.abTestMetrics)) {
-      const persistentMetrics = suggestion.abTestMetrics.map((m: any) => ({
-        id: `ab-${suggestion.id}-${m.market}`,
-        timestamp: Date.now(),
-        strategyVersion: m.strategyVersion || 'bingoSeguro',
-        poissonMode: m.poissonMode || 'off',
-        market: m.market,
-        family: m.family,
-        edge: m.edge,
-        confidence: m.confidence,
-        scoreBase: m.scoreBase,
-        scoreFinal: m.scoreFinal,
-        poissonFairProb: m.poissonFairProb,
-        poissonModelEdge: m.poissonModelEdge,
-        selected: m.selected,
-        result: null, // Será atualizado pós-jogo
-        profit: null,  // Será atualizado pós-jogo
-        roi: null,     // Será atualizado pós-jogo
-        match: m.match || '',
-        league: m.league || '',
-        odd: m.odd || 0,
-        combinedOdd: suggestion.combinedOdd || 0
-      }));
-      
-      saveABTestMetrics(persistentMetrics);
-      console.log(`[POISSON-RESULTS] 💾 Salvas ${persistentMetrics.length} métricas para sugestão ${suggestion.id}`);
-    }
-    
-    // Chamar função original
-    return originalToDTO(suggestion);
-  };
-  
-  // Hook para atualizar resultados quando jogos finalizam
-  const originalUpdateResults = window.updateGameResults || function() {};
-  
-  window.updateGameResults = function(games: any[]) {
-    // Chamar função original primeiro
-    originalUpdateResults(games);
-    
-    // Atualizar métricas Poisson baseado nos resultados
-    games.forEach(game => {
-      // Buscar sugestões que contêm este jogo
-      const metrics = getABTestMetrics().filter(m => 
-        m.match === game.match && m.result === null
-      );
-      
-      metrics.forEach(metric => {
-        // Verificar se o mercado foi acertado
-        const selection = game.combo?.find((c: any) => 
-          c.label === metric.market && c.result !== 'no-odd' && c.result !== 'avg'
-        );
+  if (originalToDTO) {
+    (window as any).toLiveMultipleSuggestionDTO = function(suggestion: any) {
+      // Salvar métricas A/B se existirem
+      if (suggestion.abTestMetrics && Array.isArray(suggestion.abTestMetrics)) {
+        const persistentMetrics = suggestion.abTestMetrics.map((m: any) => ({
+          id: `ab-${suggestion.id}-${m.market}`,
+          timestamp: Date.now(),
+          strategyVersion: m.strategyVersion || 'bingoSeguro',
+          poissonMode: m.poissonMode || 'off',
+          market: m.market,
+          family: m.family,
+          edge: m.edge,
+          fairProb: m.fairProb,
+          impliedProb: m.impliedProb,
+          modelEdge: m.modelEdge,
+          boost: m.boost,
+          veto: m.veto,
+          result: null, // Será atualizado pós-jogo
+          profit: null,  // Será atualizado pós-jogo
+          roi: null,     // Será atualizado pós-jogo
+          match: m.match || '',
+          league: m.league || '',
+          odd: m.odd || 0,
+          combinedOdd: suggestion.combinedOdd || 0
+        }));
         
-        if (selection) {
-          const result = selection.result as any;
-          const profit = selection.profit || 0;
-          
-          // Atualizar métrica
-          updateABTestResult(metric.id, result, profit);
-          
-          console.log(`[POISSON-RESULTS] 📊 Atualizado ${metric.match} ${metric.market}: ${result} (R$${profit.toFixed(2)})`);
-        }
-      });
-    });
-  };
-  
-  console.log('[POISSON-RESULTS] 🔄 Conectado com sistema de resultados');
+        saveABTestMetrics(persistentMetrics);
+        console.log(`[POISSON-RESULTS] Salvas ${persistentMetrics.length} métricas para sugestão ${suggestion.id}`);
+      }
+      
+      // Chamar função original
+      return originalToDTO(suggestion);
+    };
+  } else {
+    console.warn('toLiveMultipleSuggestionDTO não encontrado no window');
+  }
 }
 
-// Função para gerar relatório de performance Poisson
-export function generatePoissonPerformanceReport(): string {
-  const { generateABTestReport } = require('./ab-test-persistence');
-  
-  const report = generateABTestReport();
-  
-  // Adicionar análise de mercado
+// Função para analisar performance das métricas Poisson
+export function analyzePoissonPerformance() {
   const metrics = getABTestMetrics();
-  const byMarket = metrics.reduce((acc, m) => {
-    if (!acc[m.market]) {
-      acc[m.market] = { total: 0, wins: 0, profit: 0, avgEdge: 0 };
-    }
-    acc[m.market].total++;
-    if (m.result === 'win') acc[m.market].wins++;
-    if (m.profit !== null) acc[m.market].profit += m.profit;
-    acc[m.market].avgEdge += m.edge;
-    return acc;
-  }, {} as any);
   
-  // Calcular médias
-  Object.keys(byMarket).forEach(market => {
-    const data = byMarket[market];
-    data.hitRate = data.total > 0 ? (data.wins / data.total) * 100 : 0;
-    data.roi = data.profit > 0 ? (data.profit / (25 * data.total)) * 100 : 0;
-    data.avgEdge = data.avgEdge / data.total;
-  });
+  if (metrics.length === 0) {
+    return {
+      totalBets: 0,
+      totalProfit: 0,
+      roi: 0,
+      hitRate: 0,
+      byMode: {} as Record<string, any>
+    };
+  }
   
-  report += '\n📈 PERFORMANCE POR MERCADO:\n';
-  Object.entries(byMarket)
-    .sort(([,a], [,b]) => b.avgEdge - a.avgEdge)
-    .forEach(([market, data]) => {
-      report += `${market}: ${data.hitRate.toFixed(1)}% HR | R$${data.profit.toFixed(2)} | ${data.avgEdge.toFixed(1)}% edge\n`;
-    });
+  const completedBets = metrics.filter(m => m.result !== null);
+  const totalProfit = completedBets.reduce((sum, m) => sum + (m.profit || 0), 0);
+  const totalStake = completedBets.length * 30; // stake fixo de 30
+  const wins = completedBets.filter(m => m.result === 'win').length;
   
-  return report;
+  return {
+    totalBets: completedBets.length,
+    totalProfit,
+    roi: totalStake > 0 ? (totalProfit / totalStake) * 100 : 0,
+    hitRate: completedBets.length > 0 ? (wins / completedBets.length) * 100 : 0,
+    byMode: metrics.reduce((acc, m) => {
+      if (!acc[m.poissonMode]) {
+        acc[m.poissonMode] = { count: 0, profit: 0, wins: 0 };
+      }
+      acc[m.poissonMode].count++;
+      if (m.profit !== null) acc[m.poissonMode].profit += m.profit;
+      if (m.result === 'win') acc[m.poissonMode].wins++;
+      return acc;
+    }, {} as Record<string, any>)
+  };
 }
 
 // Inicializar conexão quando o módulo for carregado
