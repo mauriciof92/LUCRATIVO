@@ -20,6 +20,24 @@ export const supabase: SupabaseClient = supabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey)
   : createClient('https://placeholder.supabase.co', 'placeholder');
 
+// 🆕 Wrapper para evitar chamadas de rede em modo offline
+export const safeSupabaseCall = async <T>(
+  operation: () => Promise<T>,
+  fallbackValue: T
+): Promise<T> => {
+  if (!supabaseConfigured) {
+    console.warn('[SUPABASE] Operação ignorada - modo offline');
+    return fallbackValue;
+  }
+  
+  try {
+    return await operation();
+  } catch (error) {
+    console.error('[SUPABASE] Erro na operação:', error);
+    return fallbackValue;
+  }
+};
+
 export interface BacktestRecord {
   id: string;
   user_id?: string;
@@ -47,7 +65,7 @@ export async function saveCsvDiario(data: string, csvText: string): Promise<bool
     return true;
   }
 
-  try {
+  return safeSupabaseCall(async () => {
     const { error } = await supabase
       .from('csv_diario')
       .upsert({
@@ -63,10 +81,7 @@ export async function saveCsvDiario(data: string, csvText: string): Promise<bool
 
     console.log(`[CSV-DIARIO] CSV salvo para data ${data} (${csvText.length} chars)`);
     return true;
-  } catch (e) {
-    console.error('[CSV-DIARIO] Erro ao salvar CSV:', e);
-    return false;
-  }
+  }, false);
 }
 
 // 🆕 Função para salvar CSV manualmente com data específica (para testes)
@@ -81,7 +96,7 @@ export async function loadCsvDiario(data: string): Promise<string | null> {
     return localStorage.getItem(`csv-diario-${data}`) || null;
   }
 
-  try {
+  return safeSupabaseCall(async () => {
     const { data: result, error } = await supabase
       .from('csv_diario')
       .select('csv_text')
@@ -99,8 +114,5 @@ export async function loadCsvDiario(data: string): Promise<string | null> {
 
     console.log(`[CSV-DIARIO] CSV carregado para data ${data} (${result.csv_text.length} chars)`);
     return result.csv_text;
-  } catch (e) {
-    console.error('[CSV-DIARIO] Erro ao carregar CSV:', e);
-    return null;
-  }
+  }, null);
 }

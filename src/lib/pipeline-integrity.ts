@@ -3,7 +3,7 @@
 //   Validação completa da cadeia de dados
 //─────────────────────────────────────────
 
-import { supabase } from './supabase';
+import { supabase, supabaseConfigured, safeSupabaseCall } from './supabase';
 
 // Interface para integridade do pipeline
 export interface PipelineIntegrity {
@@ -89,23 +89,29 @@ export async function validatePipelineIntegrity(): Promise<PipelineIntegrity> {
     }
 
     // 3. Verificar betresults salvo no Supabase
-    try {
-      const { count, error } = await supabase
-        .from('bet_results')
-        .select('*', { count: 'exact', head: true });
-      
-      if (error) {
-        integrity.erros.push(`Erro Supabase: ${error.message}`);
-      } else {
-        integrity.contagens.supabaseRemoto = count || 0;
-        integrity.betresultsSalvo = integrity.contagens.supabaseRemoto > 0;
+    if (!supabaseConfigured) {
+      integrity.erros.push('Supabase não configurado - modo offline');
+      integrity.contagens.supabaseRemoto = 0;
+      integrity.betresultsSalvo = false;
+    } else {
+      try {
+        const { count, error } = await supabase
+          .from('bet_results')
+          .select('*', { count: 'exact', head: true });
         
-        if (!integrity.betresultsSalvo) {
-          integrity.erros.push('Nenhum registro encontrado no Supabase');
+        if (error) {
+          integrity.erros.push(`Erro Supabase: ${error.message}`);
+        } else {
+          integrity.contagens.supabaseRemoto = count || 0;
+          integrity.betresultsSalvo = integrity.contagens.supabaseRemoto > 0;
+          
+          if (!integrity.betresultsSalvo) {
+            integrity.erros.push('Nenhum registro encontrado no Supabase');
+          }
         }
+      } catch (e) {
+        integrity.erros.push('Falha na conexão com Supabase');
       }
-    } catch (e) {
-      integrity.erros.push('Falha na conexão com Supabase');
     }
 
     // 4. Verificar reidratação
