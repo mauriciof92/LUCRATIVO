@@ -338,6 +338,12 @@ export const useBacktest = () => {
       if (supabaseConfigured) {
         try {
           // Verificar conexão antes
+          if (!supabaseConfigured) {
+            console.warn('[SAVE] Supabase não configurado - dados salvos apenas localmente');
+            setSaveError('Dados salvos localmente. Sincronização pendente - configure Supabase.');
+            return importedCount;
+          }
+          
           const { error: pingErr } = await supabase
             .from('bet_results')
             .select('id')

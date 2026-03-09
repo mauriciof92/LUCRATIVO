@@ -3,7 +3,7 @@
 //   Validação operacional da comunicação com a base
 //─────────────────────────────────────────
 
-import { supabase } from './supabase';
+import { supabase, supabaseConfigured, safeSupabaseCall } from './supabase';
 
 // Interface para status da base
 export interface BaseStatus {
@@ -12,6 +12,7 @@ export interface BaseStatus {
   hidratacaoLocalOk: boolean;
   fallbackSupabaseOk: boolean;
   totalRegistrosImportados: number;
+  erros: string[];
   ultimoSave: {
     sucesso: boolean;
     mensagem: string;
@@ -42,6 +43,7 @@ export async function validateBaseStatus(results: any[] = []): Promise<BaseStatu
     hidratacaoLocalOk: false,
     fallbackSupabaseOk: false,
     totalRegistrosImportados: results.length,
+    erros: [],
     ultimoSave: {
       sucesso: false,
       mensagem: '',
@@ -74,23 +76,27 @@ export async function validateBaseStatus(results: any[] = []): Promise<BaseStatu
     status.checks.localStorage = localResults ? 'ok' : 'vazio';
 
     // 3. Verificar conexão com Supabase
-    try {
-      const { count, error } = await supabase
-        .from('bet_results')
-        .select('*', { count: 'exact', head: true });
-      
-      if (error) {
-        status.checks.supabaseConnection = 'erro';
-        status.fallbackSupabaseOk = false;
-      } else {
-        status.checks.supabaseConnection = 'ok';
-        status.fallbackSupabaseOk = true;
-        status.betresultsSalvo = (count || 0) > 0;
-        status.checks.betresultsTable = (count || 0) > 0 ? 'ok' : 'vazio';
-      }
-    } catch (supabaseError) {
+    if (!supabaseConfigured) {
+      status.erros.push('Supabase não configurado - modo offline');
       status.checks.supabaseConnection = 'offline';
-      status.fallbackSupabaseOk = false;
+      status.totalRegistrosImportados = 0;
+    } else {
+      try {
+        const { count, error } = await supabase
+          .from('bet_results')
+          .select('*', { count: 'exact', head: true });
+        
+        if (error) {
+          status.erros.push(`Erro Supabase: ${error.message}`);
+          status.checks.supabaseConnection = 'erro';
+        } else {
+          status.checks.supabaseConnection = count && count > 0 ? 'ok' : 'nao_salvo';
+          status.totalRegistrosImportados = count || 0;
+        }
+      } catch (e) {
+        status.erros.push('Falha na conexão com Supabase');
+        status.checks.supabaseConnection = 'erro';
+      }
     }
 
     // 4. Verificar último save (se existe no localStorage)
