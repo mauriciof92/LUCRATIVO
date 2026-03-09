@@ -18,7 +18,7 @@ if (!supabaseConfigured) {
 
 export const supabase: SupabaseClient = supabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey)
-  : createClient('', '');
+  : createClient('https://placeholder.supabase.co', 'placeholder');
 
 export interface BacktestRecord {
   id: string;
