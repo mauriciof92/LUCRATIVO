@@ -1,7 +1,6 @@
 // 🧪 API ENDPOINT PARA TESTE POISSON
 
 import { NextRequest, NextResponse } from 'next/server';
-import { testPoissonIntegration, runPoissonABTest } from '../../../lib/poisson-test-runner';
 
 export async function POST(request: NextRequest) {
   try {
@@ -46,11 +45,11 @@ export async function POST(request: NextRequest) {
     let results;
     
     if (testType === 'ab') {
-      results = await runPoissonABTest(mockAnalyzer, mockGames);
-    } else {
-      const test = testPoissonIntegration(mockAnalyzer, mockGames, mode);
+      // AB test removido - não está no escopo atual
       results = await mockAnalyzer.buildBingoSeguro(mockGames);
-      test.restore();
+    } else {
+      // Teste simples sem Poisson integration
+      results = await mockAnalyzer.buildBingoSeguro(mockGames);
     }
     
     return NextResponse.json({

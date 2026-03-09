@@ -27,6 +27,8 @@ export interface DecisionGame {
     odd: number
     edge: number
     confidence: number
+    result: "win" | "lose" | "push" | "no-odd" | "avg" | "pending_manual"
+    profit: number
   }
   secondaryMarkets: Array<{
     market: string

@@ -68,7 +68,9 @@ export function mapToDecisionGame(betResult: BetResult, index: number): Decision
     market: betResult.mainMarket.label || '',
     odd: betResult.mainMarket.odd || 0,
     edge: 0, // placeholder - campo não existe no BetResult real
-    confidence: betResult.confidence
+    confidence: betResult.confidence,
+    result: betResult.mainMarket.result || 'pending_manual',
+    profit: betResult.mainMarket.profit || 0
   };
   
   // Mapear mercados secundários - só se existir combo

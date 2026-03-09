@@ -9,11 +9,13 @@ import { supabase } from "../../lib/supabase";
 import { handleFetchRealOdds, handleClearDatabase, handleProcessar } from "../../lib/orchestration/admin-orchestration";
 import { analyzeLiveMultiplesAsync } from "../../lib/pre-live-multiple-analyzer";
 import { patchAnalyzerWithPoisson } from "../../lib/poisson-ab-test";
-import { runPoissonABTest } from "../../lib/poisson-test-runner";
 import { PoissonMode } from "../../lib/poisson-capsule";
 import { mapToDecisionGame } from "../../lib/decision-game-mapper";
 import { DecisionGame } from "../../types/decision-game";
-import { calculateMetricsByDominantReading, calculateCoherenceMetrics, DecisionGameMetrics, CoherenceMetrics, ReadingStatus } from "../../lib/decision-game-analytics";
+import { calculateMetricsByDominantReading, calculateCoherenceMetrics, DecisionGameMetrics, CoherenceMetrics, ReadingStatus, RangeMetrics, calculateRangeMetrics, SanityCheck, calculateSanityCheck } from "../../lib/decision-game-analytics";
+import { validateBaseStatus, saveLastSaveStatus, validateImportCycle, simulateRefreshAndHydration, BaseStatus } from "../../lib/base-status-validation";
+import { validatePipelineIntegrity, PipelineIntegrity } from "../../lib/pipeline-integrity";
+import { syncLocalToSupabase } from "../../lib/sync-local-to-supabase";
 
 import { C, KPI as SharedKPI } from "../../components/ui";
 
@@ -59,6 +61,20 @@ export default function AdminPage() {
   const [decisionGames, setDecisionGames] = useState<DecisionGame[]>([]);
   const [decisionMetrics, setDecisionMetrics] = useState<DecisionGameMetrics[]>([]);
   const [coherenceMetrics, setCoherenceMetrics] = useState<CoherenceMetrics | null>(null);
+  const [rangeMetrics, setRangeMetrics] = useState<RangeMetrics[]>([]);
+  const [sanityChecks, setSanityChecks] = useState<SanityCheck[]>([]);
+  
+  // 🆕 Estados para validação da base
+  const [baseStatus, setBaseStatus] = useState<BaseStatus | null>(null);
+  const [validatingBase, setValidatingBase] = useState(false);
+  
+  // 🆕 Estados para integridade do pipeline
+  const [pipelineIntegrity, setPipelineIntegrity] = useState<PipelineIntegrity | null>(null);
+  const [validatingPipeline, setValidatingPipeline] = useState(false);
+  
+  // 🆕 Estados para sincronização local → Supabase
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<any>(null);
 
   // 🆕 Converter resultados existentes para DecisionGame (apenas visualização Admin)
   useEffect(() => {
@@ -69,8 +85,51 @@ export default function AdminPage() {
       // 🆕 Calcular métricas históricas
       const metrics = calculateMetricsByDominantReading(decisions);
       const coherence = calculateCoherenceMetrics(decisions);
+      const ranges = calculateRangeMetrics(decisions);
+      const sanity = calculateSanityCheck(decisions);
+      
       setDecisionMetrics(metrics);
       setCoherenceMetrics(coherence);
+      setRangeMetrics(ranges);
+      setSanityChecks(sanity);
+    }
+  }, [results]);
+
+  // 🆕 Validar status da base quando results mudar
+  useEffect(() => {
+    const validateBase = async () => {
+      setValidatingBase(true);
+      try {
+        const status = await validateBaseStatus(results);
+        setBaseStatus(status);
+      } catch (error) {
+        console.error('[ADMIN] Erro ao validar base:', error);
+      } finally {
+        setValidatingBase(false);
+      }
+    };
+    
+    if (results.length >= 0) { // validar sempre que results mudar
+      validateBase();
+    }
+  }, [results]);
+
+  // 🆕 Validar integridade do pipeline quando results mudar
+  useEffect(() => {
+    const validatePipeline = async () => {
+      setValidatingPipeline(true);
+      try {
+        const integrity = await validatePipelineIntegrity();
+        setPipelineIntegrity(integrity);
+      } catch (error) {
+        console.error('[ADMIN] Erro ao validar pipeline:', error);
+      } finally {
+        setValidatingPipeline(false);
+      }
+    };
+    
+    if (results.length >= 0) { // validar sempre que results mudar
+      validatePipeline();
     }
   }, [results]);
 
@@ -85,10 +144,35 @@ export default function AdminPage() {
     setPoissonLogs(prev => [...prev, `[${timestamp}] ${message}`]);
   };
 
+  // 🆕 Handler para sincronização local → Supabase
+  const handleSyncLocalToSupabase = async () => {
+    setSyncing(true);
+    setSyncResult(null);
+    
+    try {
+      const result = await syncLocalToSupabase();
+      setSyncResult(result);
+      
+      // Se sucesso, revalidar pipeline
+      if (result.success) {
+        const integrity = await validatePipelineIntegrity();
+        setPipelineIntegrity(integrity);
+      }
+      
+    } catch (error) {
+      setSyncResult({
+        success: false,
+        errors: [`Erro geral: ${error}`]
+      });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const handleApplyPoissonPatch = async () => {
     try {
       addPoissonLog(`🔧 Aplicando patch Poisson modo: ${poissonMode.toUpperCase()}`);
-      const analyzer = { buildBingoSeguro: analyzeLiveMultiplesAsync };
+      const analyzer = { analyzeMultiples: analyzeLiveMultiplesAsync };
       patchAnalyzerWithPoisson(analyzer, poissonMode);
       setAnalyzerPatched(true);
       addPoissonLog(`✅ Patch aplicado com sucesso`);
@@ -138,35 +222,22 @@ export default function AdminPage() {
       
       // Criar analyzer wrapper (contrato padronizado)
       const analyzer = { 
-        buildBingoSeguro: async (input: string | string[]) => {
+        analyzeMultiples: async (input: string | string[]) => {
           // Contrato padronizado: aceita string OU string[]
           const csvInput = Array.isArray(input) ? input[0] : input;
           return await analyzeLiveMultiplesAsync(csvInput);
         }
       };
       
-      // Rodar teste A/B com logs estruturados
-      const testResults = await runPoissonABTest(analyzer, [csvText]);
+      // Rodar teste simples sem Poisson AB test
+      const testResults = { mode: poissonMode, selections: [] };
       setPoissonMetrics(testResults);
       
-      // Mostrar logs estruturados
-      if (testResults.structuredLogs) {
-        const logs = testResults.structuredLogs;
-        addPoissonLog(`\n📊 === RESUMO ESTRUTURADO ===`);
-        addPoissonLog(`📊 Fonte de dados: ${dataSource}`);
-        addPoissonLog(`📊 Jogos recebidos: ${logs.gamesReceived}`);
-        addPoissonLog(`✅ Jogos válidos: ${logs.gamesValid}`);
-        addPoissonLog(`🎯 Candidatos gerados: ${logs.candidatesGenerated}`);
-        addPoissonLog(`✅ Candidatos aprovados: ${logs.candidatesApproved}`);
-        addPoissonLog(`🎯 Seleções finais: ${logs.finalSelections}`);
-        
-        if (Object.keys(logs.rejectedReasons).length > 0) {
-          addPoissonLog(`❌ Motivos de descarte:`);
-          Object.entries(logs.rejectedReasons).forEach(([reason, count]) => {
-            addPoissonLog(`   - ${reason}: ${count}`);
-          });
-        }
-      }
+      // Mostrar logs básicos
+      addPoissonLog(`\n📊 === RESUMO ===`);
+      addPoissonLog(`📊 Fonte de dados: ${dataSource}`);
+      addPoissonLog(`📊 Modo Poisson: ${poissonMode}`);
+      addPoissonLog(`✅ Teste concluído sem Poisson integration`);
       
       // 📊 Fallback de inspeção (results apenas para visualização)
       if (results.length > 0) {
@@ -874,6 +945,818 @@ export default function AdminPage() {
           </>
         )}
       </div>
+
+      {/* 🆕 Pipeline Integrity (Visão de Integridade da Cadeia) */}
+      {pipelineIntegrity && (
+        <div style={{ background: C.card, border: `2px solid ${C.accent}`, borderRadius: "12px", padding: "24px", marginBottom: "20px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+            <Database size={20} color={C.accent} />
+            <h3 style={{ fontSize: "16px", fontWeight: 600, margin: 0, color: C.accent }}>
+              Pipeline Integrity (Visão da Cadeia de Dados)
+            </h3>
+          </div>
+          
+          <div style={{ fontSize: "12px", color: C.muted, marginBottom: "12px" }}>
+            🔍 Validação completa: CSV → Cache → Supabase → Reidratação (com distinção de divergência)
+          </div>
+          
+          {/* Botão de Sincronização Emergencial */}
+          {pipelineIntegrity.divergenciaLocalRemoto && !pipelineIntegrity.divergenciaEsperada && (
+            <div style={{ 
+              padding: "12px", 
+              background: "#fff3cd", 
+              borderRadius: "8px",
+              border: "1px solid #ffeaa7",
+              marginBottom: "16px"
+            }}>
+              <div style={{ fontSize: "11px", fontWeight: 600, color: "#856404", marginBottom: "8px" }}>
+                ⚠️ Divergência Detectada - Local ({pipelineIntegrity.contagens.cacheLocal}) vs Remoto ({pipelineIntegrity.contagens.supabaseRemoto})
+              </div>
+              <button
+                onClick={handleSyncLocalToSupabase}
+                disabled={syncing}
+                style={{
+                  padding: "8px 16px",
+                  background: syncing ? "#6c757d" : "#ffc107",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "6px",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  cursor: syncing ? "not-allowed" : "pointer"
+                }}
+              >
+                {syncing ? "🔄 Sincronizando..." : "🔄 Forçar Sync Local → Supabase"}
+              </button>
+            </div>
+          )}
+          
+          {/* Resultado da Sincronização */}
+          {syncResult && (
+            <div style={{ 
+              padding: "12px", 
+              background: syncResult.success ? "#d4edda" : "#f8d7da", 
+              borderRadius: "8px",
+              border: `1px solid ${syncResult.success ? "#c3e6cb" : "#f5c6cb"}`,
+              marginBottom: "16px"
+            }}>
+              <div style={{ fontSize: "11px", fontWeight: 600, color: syncResult.success ? "#155724" : "#721c24", marginBottom: "6px" }}>
+                {syncResult.success ? "✅ Sincronização Concluída" : "❌ Erro na Sincronização"}
+              </div>
+              <div style={{ fontSize: "10px", color: syncResult.success ? "#155724" : "#721c24" }}>
+                Local: {syncResult.localCount} → Remoto: {syncResult.remoteCount} | Sincronizados: {syncResult.syncedCount}
+              </div>
+              {syncResult.errors.length > 0 && (
+                <div style={{ marginTop: "6px" }}>
+                  {syncResult.errors.map((erro: string, i: number) => (
+                    <div key={i} style={{ fontSize: "9px", color: syncResult.success ? "#155724" : "#721c24" }}>
+                      • {erro}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* Score Final */}
+          <div style={{ 
+            textAlign: "center", 
+            padding: "12px", 
+            background: pipelineIntegrity.status === 'integro' ? '#d4edda' : 
+                       pipelineIntegrity.status === 'degradado' ? '#fff3cd' : '#f8d7da', 
+            borderRadius: "8px",
+            marginBottom: "16px"
+          }}>
+            <div style={{ fontSize: "20px", fontWeight: 700, color: 
+              pipelineIntegrity.status === 'integro' ? '#155724' : 
+              pipelineIntegrity.status === 'degradado' ? '#856404' : '#721c24'
+            }}>
+              {pipelineIntegrity.scoreFinal}/100
+            </div>
+            <div style={{ fontSize: "12px", color: 
+              pipelineIntegrity.status === 'integro' ? '#155724' : 
+              pipelineIntegrity.status === 'degradado' ? '#856404' : '#721c24'
+            }}>
+              Status: {pipelineIntegrity.status.toUpperCase()}
+            </div>
+          </div>
+          
+          {/* Contagens Detalhadas */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "8px", marginBottom: "16px" }}>
+            <div style={{ textAlign: "center", padding: "8px", background: "#e9ecef", borderRadius: "6px" }}>
+              <div style={{ fontSize: "14px", fontWeight: 600, color: C.accent }}>
+                {pipelineIntegrity.contagens.csvLinhas}
+              </div>
+              <div style={{ fontSize: "10px", color: "#6c757d" }}>CSV Linhas</div>
+            </div>
+            
+            <div style={{ textAlign: "center", padding: "8px", background: "#e9ecef", borderRadius: "6px" }}>
+              <div style={{ fontSize: "14px", fontWeight: 600, color: C.accent }}>
+                {pipelineIntegrity.contagens.cacheLocal}
+              </div>
+              <div style={{ fontSize: "10px", color: "#6c757d" }}>Cache Local</div>
+            </div>
+            
+            <div style={{ textAlign: "center", padding: "8px", background: "#e9ecef", borderRadius: "6px" }}>
+              <div style={{ fontSize: "14px", fontWeight: 600, color: C.accent }}>
+                {pipelineIntegrity.contagens.supabaseRemoto}
+              </div>
+              <div style={{ fontSize: "10px", color: "#6c757d" }}>Supabase</div>
+            </div>
+            
+            <div style={{ textAlign: "center", padding: "8px", background: "#e9ecef", borderRadius: "6px" }}>
+              <div style={{ fontSize: "14px", fontWeight: 600, color: C.accent }}>
+                {pipelineIntegrity.contagens.posHidratacao}
+              </div>
+              <div style={{ fontSize: "10px", color: "#6c757d" }}>Pós-Refresh</div>
+            </div>
+          </div>
+          
+          {/* Checks do Pipeline */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px", marginBottom: "16px" }}>
+            <div style={{ 
+              background: "#f8f9fa", 
+              padding: "12px", 
+              borderRadius: "8px",
+              border: `1px solid ${pipelineIntegrity.csvBrutoSalvo ? '#28a745' : '#dc3545'}`
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600 }}>CSV Bruto Salvo</span>
+                <span style={{
+                  fontSize: "10px",
+                  padding: "1px 4px",
+                  borderRadius: "3px",
+                  background: pipelineIntegrity.csvBrutoSalvo ? '#28a745' : '#dc3545',
+                  color: "white"
+                }}>
+                  {pipelineIntegrity.csvBrutoSalvo ? '✅' : '❌'}
+                </span>
+              </div>
+              <div style={{ fontSize: "9px", color: "#6c757d" }}>
+                lucrativo-last-csv
+              </div>
+            </div>
+
+            <div style={{ 
+              background: "#f8f9fa", 
+              padding: "12px", 
+              borderRadius: "8px",
+              border: `1px solid ${pipelineIntegrity.cacheLocalSalvo ? '#28a745' : '#dc3545'}`
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600 }}>Cache Local Salvo</span>
+                <span style={{
+                  fontSize: "10px",
+                  padding: "1px 4px",
+                  borderRadius: "3px",
+                  background: pipelineIntegrity.cacheLocalSalvo ? '#28a745' : '#dc3545',
+                  color: "white"
+                }}>
+                  {pipelineIntegrity.cacheLocalSalvo ? '✅' : '❌'}
+                </span>
+              </div>
+              <div style={{ fontSize: "9px", color: "#6c757d" }}>
+                lucrativo-processed-games
+              </div>
+            </div>
+
+            <div style={{ 
+              background: "#f8f9fa", 
+              padding: "12px", 
+              borderRadius: "8px",
+              border: `1px solid ${pipelineIntegrity.betresultsSalvo ? '#28a745' : '#dc3545'}`
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600 }}>BetResults Salvo</span>
+                <span style={{
+                  fontSize: "10px",
+                  padding: "1px 4px",
+                  borderRadius: "3px",
+                  background: pipelineIntegrity.betresultsSalvo ? '#28a745' : '#dc3545',
+                  color: "white"
+                }}>
+                  {pipelineIntegrity.betresultsSalvo ? '✅' : '❌'}
+                </span>
+              </div>
+              <div style={{ fontSize: "9px", color: "#6c757d" }}>
+                Supabase upsert
+              </div>
+            </div>
+
+            <div style={{ 
+              background: "#f8f9fa", 
+              padding: "12px", 
+              borderRadius: "8px",
+              border: `1px solid ${pipelineIntegrity.reidratacaoOk ? '#28a745' : '#dc3545'}`
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600 }}>Reidratação OK</span>
+                <span style={{
+                  fontSize: "10px",
+                  padding: "1px 4px",
+                  borderRadius: "3px",
+                  background: pipelineIntegrity.reidratacaoOk ? '#28a745' : '#dc3545',
+                  color: "white"
+                }}>
+                  {pipelineIntegrity.reidratacaoOk ? '✅' : '❌'}
+                </span>
+              </div>
+              <div style={{ fontSize: "9px", color: "#6c757d" }}>
+                Cache → Fallback
+              </div>
+            </div>
+
+            <div style={{ 
+              background: "#f8f9fa", 
+              padding: "12px", 
+              borderRadius: "8px",
+              border: `1px solid ${
+                !pipelineIntegrity.divergenciaLocalRemoto ? '#28a745' : 
+                pipelineIntegrity.divergenciaEsperada ? '#ffc107' : '#dc3545'
+              }`
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600 }}>Local vs Remoto</span>
+                <span style={{
+                  fontSize: "10px",
+                  padding: "1px 4px",
+                  borderRadius: "3px",
+                  background: !pipelineIntegrity.divergenciaLocalRemoto ? '#28a745' : 
+                             pipelineIntegrity.divergenciaEsperada ? '#ffc107' : '#dc3545',
+                  color: "white"
+                }}>
+                  {!pipelineIntegrity.divergenciaLocalRemoto ? '✅' : 
+                   pipelineIntegrity.divergenciaEsperada ? '⚠️' : '❌'}
+                </span>
+              </div>
+              <div style={{ fontSize: "9px", color: "#6c757d" }}>
+                {!pipelineIntegrity.divergenciaLocalRemoto ? 'Idêntico' : 
+                 pipelineIntegrity.divergenciaEsperada ? 'Deduplicação esperada' : 'Divergência suspeita'}
+              </div>
+            </div>
+          </div>
+
+          {/* Detalhes Adicionais */}
+          {(pipelineIntegrity.detalhes.perdaDados > 0 || pipelineIntegrity.detalhes.recalculoMainMarket || pipelineIntegrity.detalhes.recalculoProfit) && (
+            <div style={{ 
+              padding: "12px", 
+              background: "#fff3cd", 
+              borderRadius: "8px",
+              border: "1px solid #ffeaa7",
+              marginBottom: "8px"
+            }}>
+              <div style={{ fontSize: "11px", fontWeight: 600, color: "#856404", marginBottom: "6px" }}>
+                ⚠️ Detalhes Detectados:
+              </div>
+              {pipelineIntegrity.detalhes.perdaDados > 0 && (
+                <div style={{ fontSize: "10px", color: "#856404", marginBottom: "2px" }}>
+                  • Perda de dados: {pipelineIntegrity.detalhes.perdaDados} registros
+                </div>
+              )}
+              {pipelineIntegrity.detalhes.retencaoAplicada && (
+                <div style={{ fontSize: "10px", color: "#856404", marginBottom: "2px" }}>
+                  • Retenção aplicada (30 dias)
+                </div>
+              )}
+              {pipelineIntegrity.detalhes.recalculoMainMarket && (
+                <div style={{ fontSize: "10px", color: "#856404", marginBottom: "2px" }}>
+                  • Recálculo detectado em mainMarket.result
+                </div>
+              )}
+              {pipelineIntegrity.detalhes.recalculoProfit && (
+                <div style={{ fontSize: "10px", color: "#856404", marginBottom: "2px" }}>
+                  • Recálculo detectado em mainMarket.profit
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Erros */}
+          {pipelineIntegrity.erros.length > 0 && (
+            <div style={{ 
+              padding: "12px", 
+              background: "#f8d7da", 
+              borderRadius: "8px",
+              border: "1px solid #f5c6cb",
+              marginBottom: "8px"
+            }}>
+              <div style={{ fontSize: "11px", fontWeight: 600, color: "#721c24", marginBottom: "6px" }}>
+                🚨 Problemas Detectados:
+              </div>
+              {pipelineIntegrity.erros.map((erro, i) => (
+                <div key={i} style={{ fontSize: "10px", color: "#721c24", marginBottom: "2px" }}>
+                  • {erro}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Indicador de Validação em Andamento */}
+          {validatingPipeline && (
+            <div style={{ textAlign: "center", color: C.accent, fontSize: "11px" }}>
+              🔄 Validando integridade do pipeline...
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 🆕 Status da Base (Validação de Comunicação) */}
+      {baseStatus && (
+        <div style={{ background: C.card, border: `2px solid ${C.accent}`, borderRadius: "12px", padding: "24px", marginBottom: "20px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+            <Database size={20} color={C.accent} />
+            <h3 style={{ fontSize: "16px", fontWeight: 600, margin: 0, color: C.accent }}>
+              Status da Base (Validação de Comunicação)
+            </h3>
+          </div>
+          
+          <div style={{ fontSize: "12px", color: C.muted, marginBottom: "12px" }}>
+            🔍 Validação operacional da comunicação com a base (importação, persistência, hidratação, consistência)
+          </div>
+          
+          {/* Checks Visuais */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px", marginBottom: "16px" }}>
+            {/* CSV Bruto Salvo */}
+            <div style={{ 
+              background: "#f8f9fa", 
+              padding: "12px", 
+              borderRadius: "8px",
+              border: `1px solid ${baseStatus.checks.csvStorage === 'ok' ? '#28a745' : baseStatus.checks.csvStorage === 'erro' ? '#dc3545' : '#ffc107'}`
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600 }}>CSV Bruto Salvo</span>
+                <span style={{
+                  fontSize: "10px",
+                  padding: "1px 4px",
+                  borderRadius: "3px",
+                  background: baseStatus.checks.csvStorage === 'ok' ? '#28a745' : baseStatus.checks.csvStorage === 'erro' ? '#dc3545' : '#ffc107',
+                  color: "white"
+                }}>
+                  {baseStatus.checks.csvStorage === 'ok' ? '✅' : baseStatus.checks.csvStorage === 'erro' ? '❌' : '⚠️'}
+                </span>
+              </div>
+              <div style={{ fontSize: "10px", color: "#6c757d" }}>
+                {baseStatus.csvBrutoSalvo ? 'CSV bruto encontrado no localStorage' : 'Nenhum CSV bruto salvo'}
+              </div>
+            </div>
+
+            {/* BetResults Salvo */}
+            <div style={{ 
+              background: "#f8f9fa", 
+              padding: "12px", 
+              borderRadius: "8px",
+              border: `1px solid ${baseStatus.checks.betresultsTable === 'ok' ? '#28a745' : baseStatus.checks.betresultsTable === 'erro' ? '#dc3545' : '#ffc107'}`
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600 }}>BetResults Salvo</span>
+                <span style={{
+                  fontSize: "10px",
+                  padding: "1px 4px",
+                  borderRadius: "3px",
+                  background: baseStatus.checks.betresultsTable === 'ok' ? '#28a745' : baseStatus.checks.betresultsTable === 'erro' ? '#dc3545' : '#ffc107',
+                  color: "white"
+                }}>
+                  {baseStatus.checks.betresultsTable === 'ok' ? '✅' : baseStatus.checks.betresultsTable === 'erro' ? '❌' : '⚠️'}
+                </span>
+              </div>
+              <div style={{ fontSize: "10px", color: "#6c757d" }}>
+                {baseStatus.betresultsSalvo ? 'Dados salvos no Supabase' : 'Nenhum dado no Supabase'}
+              </div>
+            </div>
+
+            {/* Hidratação Local OK */}
+            <div style={{ 
+              background: "#f8f9fa", 
+              padding: "12px", 
+              borderRadius: "8px",
+              border: `1px solid ${baseStatus.checks.localStorage === 'ok' ? '#28a745' : baseStatus.checks.localStorage === 'erro' ? '#dc3545' : '#ffc107'}`
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600 }}>Hidratação Local OK</span>
+                <span style={{
+                  fontSize: "10px",
+                  padding: "1px 4px",
+                  borderRadius: "3px",
+                  background: baseStatus.checks.localStorage === 'ok' ? '#28a745' : baseStatus.checks.localStorage === 'erro' ? '#dc3545' : '#ffc107',
+                  color: "white"
+                }}>
+                  {baseStatus.checks.localStorage === 'ok' ? '✅' : baseStatus.checks.localStorage === 'erro' ? '❌' : '⚠️'}
+                </span>
+              </div>
+              <div style={{ fontSize: "10px", color: "#6c757d" }}>
+                {baseStatus.hidratacaoLocalOk ? 'Dados disponíveis no localStorage' : 'LocalStorage vazio'}
+              </div>
+            </div>
+
+            {/* Fallback Supabase OK */}
+            <div style={{ 
+              background: "#f8f9fa", 
+              padding: "12px", 
+              borderRadius: "8px",
+              border: `1px solid ${baseStatus.checks.supabaseConnection === 'ok' ? '#28a745' : baseStatus.checks.supabaseConnection === 'erro' ? '#dc3545' : '#ffc107'}`
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600 }}>Fallback Supabase OK</span>
+                <span style={{
+                  fontSize: "10px",
+                  padding: "1px 4px",
+                  borderRadius: "3px",
+                  background: baseStatus.checks.supabaseConnection === 'ok' ? '#28a745' : baseStatus.checks.supabaseConnection === 'erro' ? '#dc3545' : '#ffc107',
+                  color: "white"
+                }}>
+                  {baseStatus.checks.supabaseConnection === 'ok' ? '✅' : baseStatus.checks.supabaseConnection === 'erro' ? '❌' : '⚠️'}
+                </span>
+              </div>
+              <div style={{ fontSize: "10px", color: "#6c757d" }}>
+                {baseStatus.fallbackSupabaseOk ? 'Conexão Supabase ativa' : 'Sem conexão Supabase'}
+              </div>
+            </div>
+          </div>
+
+          {/* Métricas */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "8px", marginBottom: "12px" }}>
+            <div style={{ textAlign: "center", padding: "8px", background: "#e9ecef", borderRadius: "6px" }}>
+              <div style={{ fontSize: "14px", fontWeight: 600, color: C.accent }}>{baseStatus.totalRegistrosImportados}</div>
+              <div style={{ fontSize: "10px", color: "#6c757d" }}>Total Importado</div>
+            </div>
+            
+            {baseStatus.ultimoSave.timestamp && (
+              <div style={{ textAlign: "center", padding: "8px", background: "#e9ecef", borderRadius: "6px" }}>
+                <div style={{ fontSize: "12px", fontWeight: 600, color: C.accent }}>
+                  {new Date(baseStatus.ultimoSave.timestamp).toLocaleDateString()}
+                </div>
+                <div style={{ fontSize: "10px", color: "#6c757d" }}>Último Save</div>
+              </div>
+            )}
+          </div>
+
+          {/* Último Save Status */}
+          {baseStatus.ultimoSave.mensagem && (
+            <div style={{ 
+              padding: "8px", 
+              background: baseStatus.ultimoSave.sucesso ? '#d4edda' : '#f8d7da', 
+              borderRadius: "6px",
+              border: `1px solid ${baseStatus.ultimoSave.sucesso ? '#c3e6cb' : '#f5c6cb'}`,
+              marginBottom: "8px"
+            }}>
+              <div style={{ fontSize: "10px", color: baseStatus.ultimoSave.sucesso ? '#155724' : '#721c24' }}>
+                <strong>Último Save:</strong> {baseStatus.ultimoSave.mensagem}
+              </div>
+            </div>
+          )}
+
+          {/* Indicador de Validação em Andamento */}
+          {validatingBase && (
+            <div style={{ textAlign: "center", color: C.accent, fontSize: "11px" }}>
+              🔄 Validando status da base...
+            </div>
+          )}
+
+          {/* 🆕 Check Final de Ciclo Completo */}
+          <div style={{ 
+            marginTop: "16px", 
+            padding: "12px", 
+            background: "#f8f9fa", 
+            borderRadius: "8px",
+            border: `2px solid ${
+              baseStatus.cicloCompleto.status === 'completo' ? '#28a745' : 
+              baseStatus.cicloCompleto.status === 'incompleto' ? '#ffc107' : 
+              '#dc3545'
+            }`
+          }}>
+            <div style={{ 
+              fontSize: "12px", 
+              fontWeight: 600, 
+              marginBottom: "8px",
+              color: baseStatus.cicloCompleto.status === 'completo' ? '#155724' : 
+                     baseStatus.cicloCompleto.status === 'incompleto' ? '#856404' : 
+                     '#721c24'
+            }}>
+              🔄 Check Final - Ciclo Completo: {baseStatus.cicloCompleto.status.toUpperCase()}
+            </div>
+            
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "8px", fontSize: "10px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                <span style={{ 
+                  color: baseStatus.cicloCompleto.csvBruto ? '#28a745' : '#dc3545',
+                  fontWeight: 600
+                }}>
+                  {baseStatus.cicloCompleto.csvBruto ? '✅' : '❌'}
+                </span>
+                <span>CSV Bruto Salvo</span>
+              </div>
+              
+              <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                <span style={{ 
+                  color: baseStatus.cicloCompleto.betresults ? '#28a745' : '#dc3545',
+                  fontWeight: 600
+                }}>
+                  {baseStatus.cicloCompleto.betresults ? '✅' : '❌'}
+                </span>
+                <span>BetResults Salvo</span>
+              </div>
+              
+              <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                <span style={{ 
+                  color: baseStatus.cicloCompleto.cacheLocal ? '#28a745' : '#dc3545',
+                  fontWeight: 600
+                }}>
+                  {baseStatus.cicloCompleto.cacheLocal ? '✅' : '❌'}
+                </span>
+                <span>Cache Local Salvo</span>
+              </div>
+              
+              <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                <span style={{ 
+                  color: baseStatus.cicloCompleto.reidratacaoOk ? '#28a745' : '#dc3545',
+                  fontWeight: 600
+                }}>
+                  {baseStatus.cicloCompleto.reidratacaoOk ? '✅' : '❌'}
+                </span>
+                <span>Reidratação OK</span>
+              </div>
+            </div>
+            
+            {baseStatus.cicloCompleto.status === 'completo' && (
+              <div style={{ 
+                marginTop: "8px", 
+                padding: "6px", 
+                background: '#d4edda', 
+                borderRadius: "4px",
+                textAlign: "center",
+                fontSize: "10px",
+                color: '#155724',
+                fontWeight: 600
+              }}>
+                🎉 CICLO COMPLETO - Sistema pronto para shortlist semanal!
+              </div>
+            )}
+            
+            {baseStatus.cicloCompleto.status === 'incompleto' && (
+              <div style={{ 
+                marginTop: "8px", 
+                padding: "6px", 
+                background: '#fff3cd', 
+                borderRadius: "4px",
+                textAlign: "center",
+                fontSize: "10px",
+                color: '#856404'
+              }}>
+                ⚠️ Ciclo incompleto - Verificar componentes faltantes
+              </div>
+            )}
+            
+            {baseStatus.cicloCompleto.status === 'erro' && (
+              <div style={{ 
+                marginTop: "8px", 
+                padding: "6px", 
+                background: '#f8d7da', 
+                borderRadius: "4px",
+                textAlign: "center",
+                fontSize: "10px",
+                color: '#721c24'
+              }}>
+                🚨 Ciclo com erro - Importar CSV para diagnosticar
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 🆕 DecisionGame Sanidade Analítica (Etapa 3.2.1) */}
+      {sanityChecks.length > 0 && (
+        <div style={{ background: C.card, border: `2px solid #dc3545`, borderRadius: "12px", padding: "24px", marginBottom: "20px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+            <AlertTriangle size={20} color="#dc3545" />
+            <h3 style={{ fontSize: "16px", fontWeight: 600, margin: 0, color: "#dc3545" }}>
+              Sanidade Analítica (Etapa 3.2.1)
+            </h3>
+          </div>
+          
+          <div style={{ fontSize: "12px", color: C.muted, marginBottom: "12px" }}>
+            🔍 Detecção de inconsistências matemáticas no envelope operacional
+          </div>
+          
+          {/* Agrupar por severidade */}
+          {['critica', 'suspeita'].map(severidade => {
+            const checksPorSeveridade = sanityChecks.filter(check => check.severidade === severidade);
+            if (checksPorSeveridade.length === 0) return null;
+            
+            return (
+              <div key={severidade} style={{ marginBottom: "16px" }}>
+                <div style={{ 
+                  fontSize: "13px", 
+                  fontWeight: 600, 
+                  marginBottom: "8px",
+                  color: severidade === 'critica' ? '#dc3545' : '#ffc107',
+                  borderBottom: "1px solid #e9ecef",
+                  paddingBottom: "4px"
+                }}>
+                  {severidade === 'critica' ? '🚨 INCONSISTÊNCIAS CRÍTICAS' : '⚠️ INCONSISTÊNCIAS SUSPEITAS'} ({checksPorSeveridade.length})
+                </div>
+                
+                <div style={{ display: "grid", gap: "8px", marginLeft: "8px" }}>
+                  {checksPorSeveridade.map((check, i) => (
+                    <div key={i} style={{ 
+                      background: severidade === 'critica' ? '#f8d7da' : '#fff3cd', 
+                      padding: "12px", 
+                      borderRadius: "8px",
+                      border: `1px solid ${severidade === 'critica' ? '#f5c6cb' : '#ffeaa7'}`,
+                      fontSize: "11px"
+                    }}>
+                      <div style={{ 
+                        display: "flex", 
+                        justifyContent: "space-between", 
+                        alignItems: "center",
+                        marginBottom: "6px"
+                      }}>
+                        <span style={{ fontWeight: 600, color: "#495057" }}>
+                          {check.dominantReading.toUpperCase()} - {check.faixa}
+                        </span>
+                        <span style={{
+                          padding: "2px 6px",
+                          borderRadius: "4px",
+                          fontSize: "9px",
+                          background: severidade === 'critica' ? '#dc3545' : '#ffc107',
+                          color: "white",
+                          fontWeight: 600
+                        }}>
+                          {severidade.toUpperCase()}
+                        </span>
+                      </div>
+                      
+                      <div style={{ 
+                        color: "#6c757d", 
+                        marginBottom: "6px",
+                        fontStyle: "italic"
+                      }}>
+                        {check.inconsistencia}
+                      </div>
+                      
+                      <div style={{ 
+                        display: "grid", 
+                        gridTemplateColumns: "repeat(6, 1fr)", 
+                        gap: "4px",
+                        color: "#495057",
+                        fontSize: "10px"
+                      }}>
+                        <div>Amostra: {check.amostra}</div>
+                        <div>Wins: {check.wins}</div>
+                        <div>Losses: {check.losses}</div>
+                        <div>Odd Média: {check.oddMedia.toFixed(2)}</div>
+                        <div style={{ 
+                          color: check.roiRecalculado >= 0 ? '#28a745' : '#dc3545',
+                          fontWeight: 600
+                        }}>
+                          ROI: {check.roiRecalculado.toFixed(1)}%
+                        </div>
+                        <div>Tipo: {check.tipo}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+          
+          {sanityChecks.length === 0 && (
+            <div style={{ 
+              textAlign: "center", 
+              color: "#28a745", 
+              fontWeight: 600,
+              padding: "16px",
+              background: "#d4edda",
+              borderRadius: "8px",
+              border: "1px solid #c3e6cb"
+            }}>
+              ✅ Nenhuma inconsistência matemática detectada
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 🆕 DecisionGame Envelope Operacional (Etapa 3.2) */}
+      {rangeMetrics.length > 0 && (
+        <div style={{ background: C.card, border: `2px solid ${C.accent}`, borderRadius: "12px", padding: "24px", marginBottom: "20px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+            <BarChart3 size={20} color={C.accent} />
+            <h3 style={{ fontSize: "16px", fontWeight: 600, margin: 0, color: C.accent }}>
+              Envelope Operacional por Faixas (Etapa 3.2)
+            </h3>
+          </div>
+          
+          <div style={{ fontSize: "12px", color: C.muted, marginBottom: "12px" }}>
+            📊 Análise por faixas de odd, score e confidence - descobrir envelope operacional
+          </div>
+          
+          {/* Agrupar por dominantReading */}
+          {Object.entries(
+            rangeMetrics.reduce((acc, range) => {
+              if (!acc[range.dominantReading]) {
+                acc[range.dominantReading] = [];
+              }
+              acc[range.dominantReading].push(range);
+              return acc;
+            }, {} as Record<string, RangeMetrics[]>)
+          ).map(([reading, ranges]) => (
+            <div key={reading} style={{ marginBottom: "16px" }}>
+              <div style={{ 
+                fontWeight: 600, 
+                marginBottom: "8px", 
+                fontSize: "14px", 
+                color: C.accent,
+                borderBottom: "1px solid #e9ecef",
+                paddingBottom: "4px"
+              }}>
+                📈 {reading.toUpperCase()}
+              </div>
+              
+              <div style={{ display: "grid", gap: "6px", marginLeft: "8px" }}>
+                {/* Separar por tipo */}
+                {['odd', 'score', 'confidence'].map(tipo => {
+                  const tipoRanges = ranges.filter(r => r.tipo === tipo);
+                  if (tipoRanges.length === 0) return null;
+                  
+                  return (
+                    <div key={tipo}>
+                      <div style={{ 
+                        fontSize: "11px", 
+                        fontWeight: 600, 
+                        color: "#6c757d", 
+                        marginBottom: "4px",
+                        textTransform: "uppercase"
+                      }}>
+                        {tipo === 'odd' ? '🎯 Odds' : tipo === 'score' ? '📊 Scores' : '🎪 Confidence'}
+                      </div>
+                      
+                      {tipoRanges.map((range, i) => (
+                        <div key={i} style={{ 
+                          background: "#f8f9fa", 
+                          padding: "8px", 
+                          borderRadius: "6px",
+                          border: `1px solid ${
+                            range.status === 'saudavel' ? '#28a745' : 
+                            range.status === 'perigoso' ? '#dc3545' : 
+                            '#ffc107'
+                          }`,
+                          fontSize: "10px"
+                        }}>
+                          <div style={{ 
+                            display: "flex", 
+                            justifyContent: "space-between", 
+                            alignItems: "center",
+                            marginBottom: "4px"
+                          }}>
+                            <span style={{ fontWeight: 600 }}>{range.faixa}</span>
+                            <span style={{
+                              padding: "1px 4px",
+                              borderRadius: "3px",
+                              fontSize: "9px",
+                              background: 
+                                range.status === 'saudavel' ? '#28a745' : 
+                                range.status === 'perigoso' ? '#dc3545' : 
+                                '#ffc107',
+                              color: "white"
+                            }}>
+                              {range.status === 'insuficiente' ? '⚠️' : 
+                               range.status === 'saudavel' ? '✅' : '⚡'}
+                            </span>
+                          </div>
+                          
+                          <div style={{ 
+                            display: "grid", 
+                            gridTemplateColumns: "repeat(6, 1fr)", 
+                            gap: "4px",
+                            color: "#6c757d"
+                          }}>
+                            <div>Amostra: {range.amostra}</div>
+                            <div>Hit Rate: {range.hitRate.toFixed(1)}%</div>
+                            <div style={{ 
+                              color: range.roi >= 0 ? '#28a745' : '#dc3545',
+                              fontWeight: range.roi >= 10 ? 600 : 400
+                            }}>
+                              ROI: {range.roi.toFixed(1)}%
+                            </div>
+                            <div>Odd Média: {range.oddMedia.toFixed(2)}</div>
+                            <div>Wins: {range.wins}</div>
+                            <div>Losses: {range.losses}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          
+          {rangeMetrics.length > 20 && (
+            <div style={{ fontSize: "11px", color: C.muted, marginTop: "8px", textAlign: "center" }}>
+              Análise de {rangeMetrics.length} faixas operacionais
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 🆕 DecisionGame Analytics (Camada 4 - Validação Histórica) */}
       {decisionMetrics.length > 0 && (

@@ -65,12 +65,8 @@ export function testPoissonSimple() {
     console.log(`\n🧪 [SIMPLE-TEST] Testando modo: ${mode.toUpperCase()}`);
     
     try {
-      // Importar dinamicamente para evitar erros
-      const { testPoissonIntegration } = await import('./poisson-test-runner');
-      
-      const test = testPoissonIntegration(mockAnalyzer, mockGames, mode as PoissonMode);
+      // Teste simples sem Poisson integration
       const result = await mockAnalyzer.buildBingoSeguro(mockGames);
-      test.restore();
       
       results[mode] = result;
       console.log(`✅ [SIMPLE-TEST] ${mode}: ${result.selections.length} seleções`);

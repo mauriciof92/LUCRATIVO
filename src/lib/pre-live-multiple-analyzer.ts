@@ -839,7 +839,7 @@ export class PreLiveMultipleAnalyzer {
   }
 
   // 🆕 Bingo Seguro: Top 3-4 jogos por score com maior edge real
-  private async buildBingoSeguro(games: any[]): Promise<LiveMultipleSuggestion | null> {
+  private async buildBingoSeguroInternal(games: any[]): Promise<LiveMultipleSuggestion | null> {
     console.log('[BINGO-SEGURO] Construindo bilhete seguro com edge real...');
     
     // Mercados permitidos para o Bingo Seguro
@@ -1485,7 +1485,7 @@ export class PreLiveMultipleAnalyzer {
     }
 
     // 2️⃣ 🆕 Novos Bilhetes Bingo (substituem clássicos)
-    const bingoSeguro = await this.buildBingoSeguro(topGames);
+    const bingoSeguro = await this.buildBingoSeguroInternal(topGames);
     if (bingoSeguro) suggestions.push(bingoSeguro);
 
     const bingoAlavanc = await this.buildBingoAlavanc(topGames);

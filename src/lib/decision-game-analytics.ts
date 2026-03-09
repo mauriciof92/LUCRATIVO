@@ -31,6 +31,34 @@ export interface CoherenceMetrics {
   coerenciaPercentual: number;
 }
 
+// 🆕 Interface para sanity check analítico
+export interface SanityCheck {
+  dominantReading: string;
+  faixa: string;
+  tipo: 'odd' | 'score' | 'confidence';
+  amostra: number;
+  wins: number;
+  losses: number;
+  oddMedia: number;
+  roiRecalculado: number;
+  inconsistencia: string;
+  severidade: 'critica' | 'suspeita' | 'ok';
+}
+
+// 🆕 Interface para métricas por faixa operacional
+export interface RangeMetrics {
+  dominantReading: string;
+  faixa: string;
+  tipo: 'odd' | 'score' | 'confidence';
+  amostra: number;
+  wins: number;
+  losses: number;
+  hitRate: number;
+  roi: number;
+  oddMedia: number;
+  status: 'saudavel' | 'perigoso' | 'insuficiente';
+}
+
 // 🆕 Thresholds configuráveis para classificação
 const THRESHOLDS = {
   amostraMinima: 10,        // amostra mínima para confiança
@@ -103,6 +131,232 @@ function generateClassificationReason(
     default:
       return 'Status desconhecido';
   }
+}
+
+// 🆕 Calcular sanity check analítico
+export function calculateSanityCheck(decisionGames: DecisionGame[]): SanityCheck[] {
+  const sanityChecks: SanityCheck[] = [];
+
+  // Agrupar por dominantReading e calcular faixas
+  const groupedByReading = decisionGames.reduce((acc, game) => {
+    if (!acc[game.dominantReading]) {
+      acc[game.dominantReading] = [];
+    }
+    acc[game.dominantReading].push(game);
+    return acc;
+  }, {} as Record<string, DecisionGame[]>);
+
+  Object.entries(groupedByReading).forEach(([reading, games]) => {
+    // Faixas de Odd para sanity check
+    const oddRanges = [
+      { label: '< 1.30', min: 0, max: 1.29 },
+      { label: '1.30 a 1.49', min: 1.30, max: 1.49 },
+      { label: '1.50 a 1.79', min: 1.50, max: 1.79 },
+      { label: '1.80+', min: 1.80, max: Infinity }
+    ];
+
+    oddRanges.forEach(range => {
+      const gamesInRange = games.filter(g => 
+        g.mainMarket.odd >= range.min && g.mainMarket.odd <= range.max &&
+        g.mainMarket.result !== 'pending_manual' // apenas jogos resolvidos
+      );
+      
+      if (gamesInRange.length > 0) {
+        sanityChecks.push(calculateSanityForGames(reading, range.label, 'odd', gamesInRange));
+      }
+    });
+  });
+
+  return sanityChecks.filter(check => check.severidade !== 'ok'); // apenas problemas
+}
+
+// 🆕 Helper para calcular sanity de uma faixa específica
+function calculateSanityForGames(
+  dominantReading: string, 
+  faixa: string, 
+  tipo: 'odd' | 'score' | 'confidence', 
+  games: DecisionGame[]
+): SanityCheck {
+  const wins = games.filter(g => g.mainMarket.result === 'win').length;
+  const losses = games.filter(g => g.mainMarket.result === 'lose').length;
+  const totalProfit = games.reduce((sum, g) => sum + g.mainMarket.profit, 0);
+  const roiRecalculado = games.length > 0 ? (totalProfit / games.length) * 100 : 0;
+  const oddMedia = games.reduce((sum, g) => sum + g.mainMarket.odd, 0) / games.length;
+
+  // 🆕 Detecção de inconsistências matemáticas
+  let inconsistencia = '';
+  let severidade: 'critica' | 'suspeita' | 'ok' = 'ok';
+
+  // Inconsistência crítica: wins > 0, losses = 0, ROI negativo
+  if (wins > 0 && losses === 0 && roiRecalculado < 0) {
+    inconsistencia = `ROI negativo (${roiRecalculado.toFixed(1)}%) com ${wins} wins e 0 losses - impossível matematicamente`;
+    severidade = 'critica';
+  }
+  // Inconsistência crítica: wins = 0, losses > 0, ROI positivo
+  else if (wins === 0 && losses > 0 && roiRecalculado > 0) {
+    inconsistencia = `ROI positivo (${roiRecalculado.toFixed(1)}%) com 0 wins e ${losses} losses - impossível matematicamente`;
+    severidade = 'critica';
+  }
+  // Inconsistência suspeita: ROI muito fora do esperado para hit rate
+  else if (wins > 0 && losses > 0) {
+    const hitRate = (wins / (wins + losses)) * 100;
+    const roiEsperado = (hitRate / 100) * oddMedia * 100 - 100; // ROI teórico
+    const diferencaROI = Math.abs(roiRecalculado - roiEsperado);
+    
+    if (diferencaROI > 30) { // mais de 30% de diferença
+      inconsistencia = `ROI (${roiRecalculado.toFixed(1)}%) muito diferente do esperado (${roiEsperado.toFixed(1)}%) para HR ${hitRate.toFixed(1)}% e odd ${oddMedia.toFixed(2)}`;
+      severidade = 'suspeita';
+    }
+  }
+
+  return {
+    dominantReading,
+    faixa,
+    tipo,
+    amostra: games.length,
+    wins,
+    losses,
+    oddMedia,
+    roiRecalculado,
+    inconsistencia,
+    severidade
+  };
+}
+
+// 🆕 Calcular envelope operacional por faixas
+export function calculateRangeMetrics(decisionGames: DecisionGame[]): RangeMetrics[] {
+  const rangeMetrics: RangeMetrics[] = [];
+
+  // Agrupar por dominantReading
+  const groupedByReading = decisionGames.reduce((acc, game) => {
+    if (!acc[game.dominantReading]) {
+      acc[game.dominantReading] = [];
+    }
+    acc[game.dominantReading].push(game);
+    return acc;
+  }, {} as Record<string, DecisionGame[]>);
+
+  // Para cada dominantReading, calcular faixas
+  Object.entries(groupedByReading).forEach(([reading, games]) => {
+    // 📊 Faixas de Odd
+    const oddRanges = [
+      { label: '< 1.30', min: 0, max: 1.29 },
+      { label: '1.30 a 1.49', min: 1.30, max: 1.49 },
+      { label: '1.50 a 1.79', min: 1.50, max: 1.79 },
+      { label: '1.80+', min: 1.80, max: Infinity }
+    ];
+
+    oddRanges.forEach(range => {
+      const gamesInRange = games.filter(g => 
+        g.mainMarket.odd >= range.min && g.mainMarket.odd <= range.max
+      );
+      
+      if (gamesInRange.length > 0) {
+        rangeMetrics.push(calculateRangeMetricsForGames(reading, range.label, 'odd', gamesInRange));
+      }
+    });
+
+    // 📊 Faixas de Score
+    const scoreRanges = [
+      { label: '< 40', min: 0, max: 39 },
+      { label: '40 a 59', min: 40, max: 59 },
+      { label: '60 a 79', min: 60, max: 79 },
+      { label: '80+', min: 80, max: 100 }
+    ];
+
+    scoreRanges.forEach(range => {
+      const gamesInRange = games.filter(g => 
+        g.debugMeta.originalScore >= range.min && g.debugMeta.originalScore <= range.max
+      );
+      
+      if (gamesInRange.length > 0) {
+        rangeMetrics.push(calculateRangeMetricsForGames(reading, range.label, 'score', gamesInRange));
+      }
+    });
+
+    // 📊 Faixas de Confidence
+    const confidenceRanges = [
+      { label: '< 30%', min: 0, max: 29 },
+      { label: '30% a 49%', min: 30, max: 49 },
+      { label: '50% a 69%', min: 50, max: 69 },
+      { label: '70%+', min: 70, max: 100 }
+    ];
+
+    confidenceRanges.forEach(range => {
+      const gamesInRange = games.filter(g => 
+        g.debugMeta.originalConfidence >= range.min && g.debugMeta.originalConfidence <= range.max
+      );
+      
+      if (gamesInRange.length > 0) {
+        rangeMetrics.push(calculateRangeMetricsForGames(reading, range.label, 'confidence', gamesInRange));
+      }
+    });
+  });
+
+  return rangeMetrics.sort((a, b) => b.amostra - a.amostra);
+}
+
+// 🆕 Helper para calcular métricas de uma faixa específica
+function calculateRangeMetricsForGames(
+  dominantReading: string, 
+  faixa: string, 
+  tipo: 'odd' | 'score' | 'confidence', 
+  games: DecisionGame[]
+): RangeMetrics {
+  // 🆕 Usar resultado real do mainMarket em vez de simulação
+  const wins = games.filter(g => {
+    const result = g.mainMarket.result;
+    return result === 'win';
+  }).length;
+  
+  const losses = games.filter(g => {
+    const result = g.mainMarket.result;
+    return result === 'lose';
+  }).length;
+  
+  const pending = games.filter(g => g.mainMarket.result === 'pending_manual').length;
+  const totalResolved = wins + losses;
+  
+  const hitRate = totalResolved > 0 ? (wins / totalResolved) * 100 : 0;
+  
+  // 🆕 Calcular ROI usando profit real do mainMarket
+  const totalProfit = games.reduce((sum, g) => {
+    if (g.mainMarket.result === 'win') {
+      return sum + (g.mainMarket.profit || 0);
+    } else if (g.mainMarket.result === 'lose') {
+      return sum + (g.mainMarket.profit || 0);
+    }
+    return sum; // pending não afeta ROI ainda
+  }, 0);
+  
+  const roi = totalResolved > 0 ? (totalProfit / totalResolved) * 100 : 0;
+  const oddMedia = calculateAverageOdd(games);
+
+  // 🆕 Classificar faixa como saudável/perigoso/insuficiente
+  let status: 'saudavel' | 'perigoso' | 'insuficiente';
+  
+  if (totalResolved < 5) {
+    status = 'insuficiente';
+  } else if (hitRate >= 50 && roi >= 0) {
+    status = 'saudavel';
+  } else if (hitRate < 35 || roi < -10) {
+    status = 'perigoso';
+  } else {
+    status = 'saudavel'; // borderline considerado saudável
+  }
+
+  return {
+    dominantReading,
+    faixa,
+    tipo,
+    amostra: totalResolved, // apenas jogos resolvidos
+    wins,
+    losses,
+    hitRate,
+    roi,
+    oddMedia,
+    status
+  };
 }
 
 // Calcular métricas por dominantReading com classificação operacional
