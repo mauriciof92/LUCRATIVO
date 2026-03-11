@@ -155,83 +155,16 @@ export const useBacktest = () => {
           } catch { /* cache corrompido, continuar */ }
         }
 
-        // ── PRIORIDADE 2: Supabase (fallback remoto) ──
-        if (!supabaseConfigured) {
-          console.log('[HYDRATION] Supabase não configurado — modo offline');
-          setLoading(false);
-          return;
-        }
-        console.log('[HYDRATION] Sem cache local, buscando Supabase...');
-        const { data: betData, error } = await supabase
-          .from('bet_results')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(500);
-
-        if (error) throw error;
-        if (!betData || betData.length === 0) {
-          console.log('[HYDRATION] Nenhum dado encontrado');
-          return;
-        }
-
-        const mapped: BetResult[] = betData.map(row => {
-          let favorito: any = { lado: '', nome: '', nomeUnder: '', afFav: 0, afUnder: 0, afDiff: 0, chFavGol: 0, chFavTot: 0, chUnderGol: 0, chUnderTot: 0, cantFavHT: 0, cantUnderHT: 0, cantFavFT: 0, gol05HTFav: 0 };
-          try { const f = row.favorito_data ? JSON.parse(row.favorito_data) : null; if (f?.nome) favorito = f; } catch {}
-
-          let combo: any[] = [];
-          try { const c = row.combo_data ? JSON.parse(row.combo_data) : null; if (Array.isArray(c)) combo = c; } catch {}
-
-          let poison;
-          try { poison = row.poison_data ? JSON.parse(row.poison_data) : undefined; } catch {}
-
-          // Recalcular resultado para jogos FT que ainda estão como 'no-odd'
-          const isFT = (row.status ?? '') === 'FT';
-          const storedResult = row.main_market_result ?? 'no-odd';
-          const label = row.main_market_label ?? '';
-          const rHome = row.result_home ?? 0;
-          const rAway = row.result_away ?? 0;
-          let mainResult = storedResult;
-          let mainProfit = Number(row.main_market_profit ?? 0);
-          if (isFT && (storedResult === 'no-odd' || storedResult === 'pending_manual') && label) {
-            mainResult = resolveMarketResult(label, { resultHome: rHome, resultAway: rAway });
-            const odd = Number(row.main_market_odd ?? 0);
-            mainProfit = mainResult === 'win' ? odd * STAKE_FIXA - STAKE_FIXA
-                       : mainResult === 'lose' ? -STAKE_FIXA : 0;
-          }
-
-          // Recalcular combo results também
-          const resolvedCombo = combo.map((c: any) => {
-            if (isFT && (c.result === 'no-odd' || c.result === 'pending_manual') && c.label) {
-              const cResult = resolveMarketResult(c.label, { resultHome: rHome, resultAway: rAway });
-              const cOdd = Number(c.odd ?? 0);
-              const cProfit = cResult === 'win' ? cOdd * STAKE_FIXA - STAKE_FIXA
-                            : cResult === 'lose' ? -STAKE_FIXA : 0;
-              return { ...c, result: cResult, profit: cProfit };
-            }
-            return c;
-          });
-
-          return {
-            // ID determinístico para consistência local (não usado no upsert)
-            id: generateDeterministicId(row.match, row.hour),
-            match: row.match, league: row.league ?? '', hour: row.hour ?? '',
-            status: row.status ?? '', resultHome: rHome, resultAway: rAway,
-            profile: row.profile ?? '', score: Number(row.score ?? 0), confidence: Number(row.confidence ?? 0),
-            created_at: row.created_at ?? '', favorito, poison,
-            mainMarket: {
-              label, odd: Number(row.main_market_odd ?? 0),
-              minOdd: 0, stake: STAKE_FIXA, result: mainResult as any,
-              profit: mainProfit, hasValue: false,
-            },
-            combo: resolvedCombo, ftGoals: rHome + rAway,
-          };
-        });
-
-        console.log(`[HYDRATION] Supabase: ${mapped.length} jogos`);
-        setResults(mapped);
+        // ── PRIORIDADE 2: API /api/games (fallback remoto) ──
+        console.log('[HYDRATION] Sem cache local, buscando API...');
+        const response = await fetch('/api/games?limit=500');
+        if (!response.ok) throw new Error('Falha ao buscar jogos');
+        const { games } = await response.json();
+        if (!games || games.length === 0) return;
+        console.log(`[HYDRATION] API: ${games.length} jogos`);
+        setResults(games);
         setShowTable(true);
-        // Salvar no cache local com timestamp
-        localStorage.setItem('lucrativo-processed-games', JSON.stringify(mapped));
+        localStorage.setItem('lucrativo-processed-games', JSON.stringify(games));
         localStorage.setItem('lucrativo-cache-timestamp', new Date().toISOString().split('T')[0]);
       } catch (e) {
         console.error('[HYDRATION] Erro:', e);
@@ -295,149 +228,28 @@ export const useBacktest = () => {
       setLastCsvText(text); // Preservar CSV original para Múltiplas
       if (typeof window !== 'undefined') localStorage.setItem('lucrativo-last-csv', text);
       
-      // 🆕 Salvar CSV bruto por data no Supabase
-      const csvDataDDMM = getImportDateDDMM(text);
-      console.log(`[CSV-IMPORT] Salvando CSV bruto para data ${csvDataDDMM}`);
-      const csvSaved = await saveCsvDiario(csvDataDDMM, text);
-      if (csvSaved) {
-        console.log(`[CSV-IMPORT] CSV bruto salvo com sucesso para ${csvDataDDMM}`);
-      } else {
-        console.warn(`[CSV-IMPORT] Falha ao salvar CSV bruto para ${csvDataDDMM}`);
+      const response = await fetch('/api/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csvText: text }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || 'Erro ao importar');
       }
-      // Usar processNSGames para processar TODOS os jogos (NS + FT)
-      const allResults = processNSGames(text);
-      // Adicionar stake fixa + importDate
-      const newResults: BetResult[] = allResults.map(r => ({
-        ...r,
-        importDate: getImportDateISO(r.hour),
-        mainMarket: { ...r.mainMarket, stake: STAKE_FIXA },
-        combo: r.combo.map(c => ({ ...c, stake: STAKE_FIXA })),
-      })) as any;
 
-      // 🔄 MERGE com resultados existentes (acumular histórico)
-      const prevResults = results; // estado anterior
-      const mergedMap = new Map<string, BetResult>();
-      // 1. Inserir resultados anteriores
-      for (const r of prevResults) mergedMap.set(r.id, r);
-      // 2. Sobrescrever com novos (mesmo jogo = atualiza, novo jogo = adiciona)
-      for (const r of newResults) mergedMap.set(r.id, r);
-      // 3. Aplicar retenção de 30 dias
-      const merged = applyRetention(Array.from(mergedMap.values()));
+      const { imported, total, errors: apiErrors } = await response.json();
 
-      setResults(merged);
+      if (apiErrors?.length > 0) {
+        console.warn('[IMPORT] Avisos da API:', apiErrors);
+      }
+
+      console.log(`[IMPORT] ${imported} jogos importados, ${total} total`);
+
       setShowTable(true);
-      const importedCount = newResults.length;
-      const totalCount = merged.length;
-      console.log(`[CSV-IMPORT] ${importedCount} jogos novos importados, ${totalCount} total acumulado (merge + retenção ${RETENTION_DAYS}d)`);
-
-      // Usar merged em vez de results para Supabase upsert
-      const mergedResults = merged;
-
-      // Salvar no Supabase com dados completos (incluindo favorito e combo)
-      setSaveError(null); // Limpar erro anterior
-      if (supabaseConfigured) {
-        try {
-          // Verificar conexão antes
-          if (!supabaseConfigured) {
-            console.warn('[SAVE] Supabase não configurado - dados salvos apenas localmente');
-            setSaveError('Dados salvos localmente. Sincronização pendente - configure Supabase.');
-            return importedCount;
-          }
-          
-          const { error: pingErr } = await supabase
-            .from('bet_results')
-            .select('id')
-            .limit(1);
-            
-          if (pingErr) {
-            console.error('[SAVE] Supabase inacessível:', pingErr.message);
-            throw pingErr;
-          }
-
-          // Função para mapear resultado para formato do Supabase
-          const toSupabaseRow = (r: BetResult) => ({
-            // Sem ID - vai ser gerado pelo Supabase ou usar match+hour como chave
-            match: r.match,
-            league: r.league,
-            hour: r.hour,
-            status: r.status,
-            result_home: r.resultHome,
-            result_away: r.resultAway,
-            profile: r.profile,
-            score: r.score,
-            confidence: r.confidence,
-            main_market_label: r.mainMarket.label,
-            main_market_odd: r.mainMarket.odd,
-            main_market_result: r.mainMarket.result,
-            main_market_profit: r.mainMarket.profit,
-            favorito_data: JSON.stringify(r.favorito),
-            combo_data: JSON.stringify(r.combo),
-            poison_data: JSON.stringify(r.poison),
-          });
-
-          const upsertRows = mergedResults.map(toSupabaseRow);
-
-          // Antes do chunking em lotes de 50
-          // Deduplicar por match+hour: FT > NS > outros, mais recente por último
-          const deduped = Object.values(
-            upsertRows.reduce((acc, row) => {
-              const key = `${row.match}__${row.hour}` 
-              const existing = acc[key]
-              if (!existing) return { ...acc, [key]: row }
-              
-              // Prioridade: FT > qualquer outro status
-              const existingIsFT = existing.status === 'FT'
-              const rowIsFT = row.status === 'FT'
-              
-              if (!existingIsFT && rowIsFT) return { ...acc, [key]: row } // novo é FT, substituir
-              return acc // manter existente
-            }, {} as Record<string, typeof upsertRows[0]>)
-          );
-
-          console.log(`[SAVE] Deduplicação: ${upsertRows.length} → ${deduped.length} registros`);
-
-          // Salvar em lotes de 50 para evitar timeout
-          const BATCH = 50;
-          let totalSaved = 0;
-          
-          for (let i = 0; i < deduped.length; i += BATCH) {
-            const batch = deduped.slice(i, i + BATCH);
-            const { data, error: upsertErr } = await supabase
-              .from('bet_results')
-              .upsert(batch, { 
-                onConflict: 'match,hour',  // Usar match+hour como chave de conflito
-                ignoreDuplicates: false      // atualiza se já existe
-              })
-              .select('id');
-              
-            if (upsertErr) {
-              console.error(`[SAVE] Erro no lote ${i}-${i+BATCH}:`, 
-                upsertErr.message, upsertErr.details);
-              setSaveError(`Erro ao salvar lote ${i}-${i+BATCH}: ${upsertErr.message}`);
-            } else {
-              totalSaved += data?.length ?? batch.length;
-              console.log(`[SAVE] Lote ${i}-${i+BATCH}: OK (${data?.length ?? batch.length} registros)`);
-            }
-          }
-          
-          if (totalSaved === deduped.length) {
-            console.log(`[SAVE] ✅ Total salvo: ${totalSaved}/${deduped.length}`);
-          } else {
-            setSaveError(`Salvo parcialmente: ${totalSaved}/${deduped.length}. Verifique conexão.`);
-          }
-          
-        } catch (e: any) {
-          console.error('[SAVE] Falha crítica:', e?.message ?? e);
-          setSaveError('Dados salvos localmente. Sincronização pendente - verifique conexão.');
-        }
-      }
-
-      // Salvar no cache local como backup (sem versão fixa — merge garante consistência)
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('lucrativo-processed-games', JSON.stringify(merged));
-        localStorage.setItem('lucrativo-cache-timestamp', new Date().toISOString().split('T')[0]);
-      }
-      return importedCount;
+      window.dispatchEvent(new Event('csv-imported'));
+      return imported;
     } catch (e: any) {
       setErr(e.message || "Erro na importação");
       return 0;

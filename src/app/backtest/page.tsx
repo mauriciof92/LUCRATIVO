@@ -110,7 +110,7 @@ export default function BacktestPage() {
                     const isExpanded = expandedId === r.id;
                     const hourClean = (r.hour || '').replace(/^\d{2}\/\d{2}\s*/, '') || '—';
                     return (
-                      <Fragment key={r.id}>
+                      <Fragment key={`${r.id}-${r.hour}-${r.league}`}>
                         <tr
                           onClick={() => setExpandedId(isExpanded ? null : r.id)}
                           style={{

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Extract Labels</title>
+</head>
+<body>
+    <h1>Extraindo Labels do LocalStorage</h1>
+    <button onclick="extractLabels()">Extrair Labels</button>
+    <pre id="output"></pre>
+    
+    <script>
+        function extractLabels() {
+            try {
+                const games = JSON.parse(localStorage.getItem('lucrativo-processed-games') || '[]');
+                const labels = new Set();
+                games.forEach(g => {
+                    if (g.mainMarket?.label) labels.add(g.mainMarket.label);
+                    g.combo?.forEach(c => { if (c.label) labels.add(c.label); });
+                });
+                
+                const result = JSON.stringify([...labels], null, 2);
+                document.getElementById('output').textContent = result;
+                console.log(result);
+            } catch (error) {
+                console.error('Erro:', error);
+                document.getElementById('output').textContent = 'Erro: ' + error.message;
+            }
+        }
+    </script>
+</body>
+</html>

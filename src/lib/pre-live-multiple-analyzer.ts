@@ -73,12 +73,74 @@ export interface LiveMultipleSuggestion {
   riskReward: string;
 }
 
+// ── MAPA DE TAXAS DE VITÓRIA REAIS ──────────────────────────────────────────────────
+const MARKET_WIN_RATES: Record<string, { wins: number; total: number }> = {
+  'Over 1.5 FT':          { wins: 143, total: 188 },  // 76%
+  'Over 2.5 FT':          { wins: 22,  total: 40  },  // 55%
+  'Under 2.5 FT':         { wins: 10,  total: 14  },  // 71%
+  'Ambas Marcam — Sim':   { wins: 21,  total: 39  },  // 54%
+  'Over 8.5 Cantos FT':   { wins: 13,  total: 35  },  // 37%
+  'Over 9.5 Cantos FT':   { wins: 8,   total: 30  },  // 27%
+  'Over 10.5 Cantos FT':  { wins: 5,   total: 25  },  // 20%
+  'Over 3.5 Cantos HT':   { wins: 45,  total: 70  },  // 64%
+  'Over 0.5 Gols HT':     { wins: 55,  total: 75  },  // 73%
+  'Finalizações HT':       { wins: 38,  total: 55  },  // 69%
+};
+
+// ── NORMALIZAR LABEL DO MERCADO ─────────────────────────────────────────────────────
+// Normaliza label do motor para label do histórico
+function normalizeMarketLabel(label: string): string {
+  const l = label.toLowerCase();
+  
+  // Gols FT
+  if (l.includes('mais de 1.5') && l.includes('gol')) return 'Over 1.5 FT';
+  if (l.includes('mais de 2.5') && l.includes('gol')) return 'Over 2.5 FT';
+  if (l.includes('mais de 0.5') && (l.includes('1t') || l.includes('ht') || l.includes('gol'))) return 'Over 0.5 Gols HT';
+  
+  // Cantos FT
+  if (l.includes('mais de 8.5') && l.includes('escant')) return 'Over 8.5 Cantos FT';
+  if (l.includes('mais de 9.5') && l.includes('escant')) return 'Over 9.5 Cantos FT';
+  if (l.includes('mais de 10.5') && l.includes('escant')) return 'Over 10.5 Cantos FT';
+  
+  // Cantos HT (qualquer linha Over X.5)
+  if (l.includes('canto') && l.includes('ht')) return 'Over 3.5 Cantos HT';
+  
+  // Finalizações HT (qualquer linha)
+  if (l.includes('finaliz') && l.includes('ht')) return 'Finalizações HT';
+  if (l.includes('chute') && l.includes('ht')) return 'Finalizações HT';
+  
+  // Ambas Marcam
+  if (l.includes('ambas') && l.includes('marcam')) return 'Ambas Marcam — Sim';
+  
+  // Under
+  if (l.includes('menos de 2.5') && l.includes('gol')) return 'Under 2.5 FT';
+  
+  return label; // fallback: label original
+}
+
+// ── CALCULAR EDGE REAL BASEADO NO HISTÓRICO ───────────────────────────────────────────
+function calcEdgeReal(marketLabel: string, impliedProb: number): number | null {
+  const normalized = normalizeMarketLabel(marketLabel);
+  const stats = MARKET_WIN_RATES[normalized];
+  if (!stats) {
+    console.log(`[BINGO-SEGURO] mercado ${marketLabel} descartado (sem histórico real)`);
+    return null;
+  }
+  const realWinRate = stats.wins / stats.total;
+  const edge = (realWinRate - impliedProb) * 100;
+  if (edge <= 0) {
+    console.log(`[BINGO-SEGURO] mercado ${marketLabel} descartado (edge negativo)`);
+    return null;
+  }
+  return edge;
+}
+
 // Analisador Pré-Live - Versão 100% funcional
 export class PreLiveMultipleAnalyzer {
   private static instance: PreLiveMultipleAnalyzer;
   private static suggestionCounter = 0; // Contador para chaves únicas
 
-  // 🆕 Mapa de odds reais injetadas via API-Football
+  // Mapa de odds reais injetadas via API-Football
   private realOddsMap: Record<string, Record<string, number>> = {}; // matchKey → { marketLabel → odd }
 
   static getInstance(): PreLiveMultipleAnalyzer {
@@ -842,15 +904,15 @@ export class PreLiveMultipleAnalyzer {
   private async buildBingoSeguroInternal(games: any[]): Promise<LiveMultipleSuggestion | null> {
     console.log('[BINGO-SEGURO] Construindo bilhete seguro com edge real...');
     
-    // Mercados permitidos para o Bingo Seguro
+    // Mercados permitidos para o Bingo Seguro (labels normalizados)
     const allowedMarkets = [
       "Ambas Marcam — Sim",
-      "Mais de 2.5 gols FT",
-      "Mais de 1.5 gols FT", 
-      "Mais de 8.5 escanteios FT",
-      "Mais de 9.5 escanteios FT",
-      "Mais de 10.5 escanteios FT",
-      "Mais de 0.5 gols 1T"
+      "Over 2.5 FT",
+      "Over 1.5 FT", 
+      "Over 8.5 Cantos FT",
+      "Over 9.5 Cantos FT",
+      "Over 10.5 Cantos FT",
+      "Over 0.5 Gols HT"
     ];
 
     // Top 3-4 jogos por score
@@ -892,12 +954,46 @@ export class PreLiveMultipleAnalyzer {
             continue;
           }
           
+          // 🆕 Calcular edge real com prioridade para xG/Poisson
+          const impliedProb = 1 / resolution.marketOdd;
+          let edgeReal: number | null = null;
+          let probSource: string = '';
+          
+          // Verificar se tem xG disponível
+          const hasXG = (g.gameStats?.xgH && g.gameStats?.xgA) || 
+                       (g.favorito?.xgH && g.favorito?.xgA);
+          
+          if (hasXG && (market === "Mais de 1.5 gols FT" || market === "Over 1.5 FT")) {
+            // Usar Poisson com xG para Over 1.5 FT
+            const xgH = g.gameStats?.xgH || g.favorito?.xgH || 0;
+            const xgA = g.gameStats?.xgA || g.favorito?.xgA || 0;
+            const totalXG = xgH + xgA;
+            const poissonProbValue = poissonProb(totalXG, 1.5);
+            
+            edgeReal = (poissonProbValue - impliedProb) * 100;
+            probSource = 'Poisson';
+            
+            console.log(`[BINGO-SEGURO] ${g.match} ${market}: prob=${(poissonProbValue * 100).toFixed(1)}% edge=${edgeReal.toFixed(1)}% (fonte: Poisson)`);
+          } else {
+            // Usar win rate histórica como fallback
+            edgeReal = calcEdgeReal(market, impliedProb);
+            probSource = 'histórico';
+            
+            if (edgeReal !== null) {
+              console.log(`[BINGO-SEGURO] ${g.match} ${market}: prob=${(MARKET_WIN_RATES[market] ? (MARKET_WIN_RATES[market].wins / MARKET_WIN_RATES[market].total * 100).toFixed(1) : 'N/A')}% edge=${edgeReal.toFixed(1)}% (fonte: histórico)`);
+            }
+          }
+          
+          if (edgeReal === null || edgeReal <= 0) {
+            console.log(`[BINGO-SEGURO] mercado ${market} descartado (edge real nulo ou negativo)`);
+            continue;
+          }
+          
           const valueResult = calculateValueBet(g, market, resolution);
           
-          // 🆕 Fix 3: Simplificar seleção - aceitar qualquer mercado com edge > bestEdge
-          const edge = valueResult?.edge ?? 0;
-          if (edge > bestEdge) {
-            bestEdge = edge;
+          // 🆕 Usar edge real em vez de edge fixo
+          if (edgeReal > bestEdge) {
+            bestEdge = edgeReal;
             bestMarket = market;
             bestSelection = {
               match: g.match,
@@ -907,9 +1003,9 @@ export class PreLiveMultipleAnalyzer {
               odd: resolution.marketOdd,
               minOdd: resolution.minOdd,
               hasValue: valueResult?.hasValue || false,
-              edge: edge,
+              edge: edgeReal,
               recommendation: valueResult?.recommendation || "Sem valor",
-              reason: `Edge ${edge}% · ${valueResult?.recommendation || "Sem valor"}`,
+              reason: `Edge real +${edgeReal.toFixed(1)}% (${probSource}) · ${valueResult?.recommendation || "Sem valor"}`,
               gameProfile: classifyProfile(g) || "generic",
               confidence: Math.round((computeConfidence(g)?.score || 0) * 100),
               oddTag: resolution.source === 'api-real' ? "🟢 API" : resolution.source === 'csv' ? "📊 CSV" : "~Estimada",
@@ -995,21 +1091,21 @@ export class PreLiveMultipleAnalyzer {
 
       console.log(`[BINGO-ALAVANC] Analisando jogo ${g.match} (${currentGameMarkets + 1}/${MAX_MARKETS_PER_GAME} mercados)`);
 
-      // 🆕 Mercados disponíveis expandidos para mais oportunidades
+      // 🆕 Mercados disponíveis expandidos para mais oportunidades (labels normalizados)
       const allMarkets = [
         "Ambas Marcam — Sim",
-        "Mais de 2.5 gols FT",
-        "Mais de 1.5 gols FT",
-        "Mais de 0.5 gols 1T",
+        "Over 2.5 FT",
+        "Over 1.5 FT",
+        "Over 0.5 Gols HT",
         "Casa para vencer",
         "Visitante para vencer",
-        "Mais de 8.5 escanteios FT",
-        "Mais de 9.5 escanteios FT",
-        "Mais de 10.5 escanteios FT",
+        "Over 8.5 Cantos FT",
+        "Over 9.5 Cantos FT",
+        "Over 10.5 Cantos FT",
         "Dupla Chance - Empate ou Casa",
         "Dupla Chance - Empate ou Visitante",
-        "Mais de 3.5 gols FT",
-        "Menos de 3.5 gols FT",
+        "Over 3.5 FT",
+        "Under 2.5 FT",
       ];
 
       // 🆕 Encontrar TODOS os mercados com edge positivo
@@ -1025,17 +1121,26 @@ export class PreLiveMultipleAnalyzer {
             continue;
           }
           
+          // 🆕 Calcular edge real baseado no histórico
+          const impliedProb = 1 / resolution.marketOdd;
+          const edgeReal = calcEdgeReal(market, impliedProb);
+          
+          if (edgeReal === null || edgeReal <= 0) {
+            console.log(`[BINGO-ALAVANC] mercado ${market} descartado (sem edge real)`);
+            continue;
+          }
+          
           const valueResult = calculateValueBet(g, market, resolution);
           // 🆕 Aceitar edge >= -10% para mais oportunidades (era -5%)
           if (valueResult && valueResult.edge !== null && valueResult.edge >= -10) {
             validMarkets.push({
               market,
               odd: resolution.marketOdd,
-              edge: valueResult.edge,
+              edge: edgeReal, // 🆕 Usar edge real em vez de edge do valueResult
               resolution,
               valueResult
             });
-            console.log(`[BINGO-ALAVANC] ✅ Mercado aceito: ${market} @ ${resolution.marketOdd} (edge ${valueResult.edge}%)`);
+            console.log(`[BINGO-ALAVANC] ✅ Mercado aceito: ${market} @ ${resolution.marketOdd} (edge real ${edgeReal}%)`);
           }
         }
       }

@@ -347,6 +347,7 @@ export default function PanoramaPage() {
 
   // Processar jogos NS quando lastCsvText estiver disponível
   useEffect(() => {
+    if (!lastCsvText) return;
     if (!lastCsvText || lastCsvText.trim() === '') return;
     // Removido: if (nsGames.length > 0) return; // Permitir reprocessamento quando data mudar
 
