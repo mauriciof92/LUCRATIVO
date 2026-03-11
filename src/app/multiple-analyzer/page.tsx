@@ -395,6 +395,26 @@ function MultipleCard({ s }: { s: any }) {
   const profiles = Array.from(new Set(groups.map((g: any) => g.profile ?? '')))
   const synergyLabel = getSynergyLabel(profiles)
 
+  // 🆕 Função para formatar seleções
+  const formatSelection = (sel: any) => {
+    const hitRatePct = sel.hitRatePct 
+      ? `${sel.hitRatePct}%` 
+      : sel.hitRate
+      ? `${Math.round(Number(sel.hitRate) * 100)}%` 
+      : null;
+
+    const label = sel.label ?? sel.market ?? '';
+
+    // Para Finalizações HT, usar sublabel se existir
+    const detail = sel.sublabel || '';
+
+    const odd = sel.odd
+      ? `@ ${Number(sel.odd).toFixed(2)}` 
+      : '';
+
+    return { label, detail, hitRatePct, odd };
+  };
+
   return (
     <div style={{
       background: '#161b22',
@@ -471,18 +491,7 @@ function MultipleCard({ s }: { s: any }) {
                 }}>
                   {g.confidence ?? 0}%
                 </span>
-                {/* Badge de perfil */}
-                {g.profile && (
-                  <span style={{
-                    fontSize: 10,
-                    color: '#8b949e',
-                    background: '#21262d',
-                    padding: '2px 7px',
-                    borderRadius: 4,
-                  }}>
-                    {g.profile}
-                  </span>
-                )}
+                {/* REMOVIDO: Badge de perfil - não mostrar na UI do usuário */}
                 {/* Odd do jogo */}
                 <span style={{
                   fontSize: 13,
@@ -498,32 +507,63 @@ function MultipleCard({ s }: { s: any }) {
 
             {/* Linhas do jogo */}
             <div style={{ padding: '8px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {g.lines.map((sel: any, si: number) => (
-                <div key={si} style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <div style={{
-                      width: 6, height: 6,
-                      borderRadius: '50%',
-                      background: style.color,
-                      flexShrink: 0,
-                    }} />
-                    <span style={{ fontSize: 13, color: '#c9d1d9' }}>
-                      {sel.market}
-                    </span>
-                  </div>
-                  <span style={{
-                    fontSize: 14,
-                    fontWeight: 600,
-                    color: sel.odd > 1 ? '#e6edf3' : '#555',
+              {g.lines.map((sel: any, si: number) => {
+                const { label, detail, hitRatePct, odd } = formatSelection(sel);
+                return (
+                  <div key={si} style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 2,
                   }}>
-                    {sel.odd > 1 ? Number(sel.odd).toFixed(2) : '—'}
-                  </span>
-                </div>
-              ))}
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{
+                          width: 6, height: 6,
+                          borderRadius: '50%',
+                          background: style.color,
+                          flexShrink: 0,
+                        }} />
+                        <div>
+                          <div className="font-medium text-sm" style={{ fontSize: 13, color: '#c9d1d9' }}>
+                            {label}
+                            {detail && (
+                              <span className="text-xs text-gray-400 ml-1" style={{ fontSize: 11, color: '#8b949e', marginLeft: 4 }}>
+                                — {detail}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      paddingLeft: 14, // Alinhar com o texto acima
+                      marginTop: 2,
+                    }}>
+                      {hitRatePct && (
+                        <span className="text-gray-500" style={{ fontSize: 11, color: '#8b949e' }}>
+                          {hitRatePct} histórico
+                        </span>
+                      )}
+                      {odd && sel.source !== 'poisson-chutes-ht' && !label.includes('Finalizações HT') && (
+                        <span className="font-bold text-emerald-600" style={{
+                          fontSize: 14,
+                          fontWeight: 600,
+                          color: '#3fb950',
+                        }}>
+                          {odd}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         ))}

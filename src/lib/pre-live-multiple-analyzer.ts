@@ -1147,11 +1147,45 @@ export class PreLiveMultipleAnalyzer {
           if (edgeReal > bestEdge) {
             bestEdge = edgeReal;
             bestMarket = market;
+            // 🆕 Criar seleção Finalizações HT com linha apostável correta
+            let marketName = market;
+            let additionalData: any = {};
+            
+            if (market === 'Finalizações HT') {
+              const fav = getFavorito(g);
+              const lambda = fav.lado === '🏠' ? (g.chHTH ?? 0) : (g.chHTA ?? 0);
+              const favTeam = fav.lado === '🏠' ? (g.home ?? 'Casa') : (g.away ?? 'Fora');
+              
+              // Calcular linha apostável (lambda arredondado para baixo - 0.5)
+              const linha = Math.floor(lambda) - 0.5;
+              
+              // Validar que linha não seja negativa
+              if (linha < 0.5) {
+                console.log(`[BINGO-SEGURO] Finalizações HT descartado - linha muito baixa: ${linha} (lambda=${lambda})`);
+                continue; // Pular para próximo mercado
+              }
+              
+              // Calcular probabilidade com Poisson
+              const prob = Math.round((1 - (1 - poissonProb(lambda, linha))) * 100); // poissonProb já retorna P(X > k)
+              
+              marketName = `Over ${linha} Finalizações HT`;
+              additionalData = {
+                sublabel: `${favTeam} · média ${lambda} chutes/jogo`,
+                hitRate: prob / 100,
+                hitRatePct: prob,
+                linha: linha,
+                lambda: lambda,
+                source: 'poisson-chutes-ht',
+              };
+              
+              console.log(`[BINGO-SEGURO] Finalizações HT: ${marketName} - ${additionalData.sublabel} - prob=${prob}%`);
+            }
+
             bestSelection = {
               match: g.match,
               league: g.league || "—",
               hour: g.hour || "—",
-              market: market,
+              market: marketName,
               odd: resolution.marketOdd,
               minOdd: resolution.minOdd,
               hasValue: valueResult?.hasValue || false,
@@ -1161,6 +1195,7 @@ export class PreLiveMultipleAnalyzer {
               gameProfile: classifyProfile(g) || "generic",
               confidence: Math.round((computeConfidence(g)?.score || 0) * 100),
               oddTag: resolution.source === 'api-real' ? "🟢 API" : resolution.source === 'csv' ? "📊 CSV" : "~Estimada",
+              ...additionalData, // 🆕 Adicionar dados específicos do Finalizações HT
             };
           }
         }
@@ -1357,11 +1392,45 @@ export class PreLiveMultipleAnalyzer {
           continue;
         }
         
+        // 🆕 Criar seleção Finalizações HT com linha apostável correta
+        let marketName = bestMarket.market;
+        let additionalData: any = {};
+        
+        if (marketName === 'Finalizações HT') {
+          const fav = getFavorito(g);
+          const lambda = fav.lado === '🏠' ? (g.chHTH ?? 0) : (g.chHTA ?? 0);
+          const favTeam = fav.lado === '🏠' ? (g.home ?? 'Casa') : (g.away ?? 'Fora');
+          
+          // Calcular linha apostável (lambda arredondado para baixo - 0.5)
+          const linha = Math.floor(lambda) - 0.5;
+          
+          // Validar que linha não seja negativa
+          if (linha < 0.5) {
+            console.log(`[BINGO-ALAVANC] Finalizações HT descartado - linha muito baixa: ${linha} (lambda=${lambda})`);
+            continue;
+          }
+          
+          // Calcular probabilidade com Poisson
+          const prob = Math.round((1 - (1 - poissonProb(lambda, linha))) * 100); // poissonProb já retorna P(X > k)
+          
+          marketName = `Over ${linha} Finalizações HT`;
+          additionalData = {
+            sublabel: `${favTeam} · média ${lambda} chutes/jogo`,
+            hitRate: prob / 100,
+            hitRatePct: prob,
+            linha: linha,
+            lambda: lambda,
+            source: 'poisson-chutes-ht',
+          };
+          
+          console.log(`[BINGO-ALAVANC] Finalizações HT: ${marketName} - ${additionalData.sublabel} - prob=${prob}%`);
+        }
+
         const selection = {
           match: g.match,
           league: g.league || "—",
           hour: g.hour || "—",
-          market: bestMarket.market,
+          market: marketName,
           odd: bestMarket.odd,
           minOdd: bestMarket.resolution.minOdd,
           hasValue: bestMarket.valueResult.hasValue,
@@ -1371,6 +1440,7 @@ export class PreLiveMultipleAnalyzer {
           gameProfile: classifyProfile(g) || "generic",
           confidence: Math.round((computeConfidence(g)?.score || 0) * 100),
           oddTag: bestMarket.resolution.source === 'api-real' ? "🟢 API" : bestMarket.resolution.source === 'csv' ? "📊 CSV" : "~Estimada",
+          ...additionalData, // 🆕 Adicionar dados específicos do Finalizações HT
         };
 
         selections.push(selection);

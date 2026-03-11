@@ -121,9 +121,14 @@ export const TRIGGER_MAP: Record<string, TriggerFn> = {
 
 // Retorna apenas os mercados elegíveis para um jogo
 export function getEligibleMarkets(game: Record<string, any>): string[] {
-  return Object.entries(TRIGGER_MAP)
+  const markets = Object.entries(TRIGGER_MAP)
     .filter(([label, fn]) => !label.startsWith('__') && fn(game))
     .map(([label]) => label);
+  
+  // 🆕 LOG TEMPORÁRIO PARA DEBUG
+  console.log(`[TRIGGER] ${game.match ?? game.home}: ${markets.join(' | ') || 'NENHUM'}`);
+  
+  return markets;
 }
 
 // Verifica se um mercado específico é elegível
