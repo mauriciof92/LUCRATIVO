@@ -8,6 +8,7 @@ import {
 
 import { parseCSV, getOddForLabel, classifyProfile, getFavorito, computeConfidence, computeScore, calculateValueBet, getMinOddForLabel, suggestMainMarket, suggestCombo, detectPoisonTriggers, suggestBetBuilder, extractDateFromHour } from "../engine";
 import { OddsResolution } from '../types/odds';
+import { getEligibleMarkets, isMarketEligible } from './trigger-map';
 
 // ── FUNÇÕES POISSON ─────────────────────────────────────────────────────────────
 // Memoizar factorial para não recalcular
@@ -79,7 +80,7 @@ const MARKET_WIN_RATES: Record<string, { wins: number; total: number }> = {
   'Over 2.5 FT':          { wins: 22,  total: 40  },  // 55%
   'Under 2.5 FT':         { wins: 10,  total: 14  },  // 71%
   'Ambas Marcam — Sim':   { wins: 21,  total: 39  },  // 54%
-  'Over 8.5 Cantos FT':   { wins: 13,  total: 35  },  // 37%
+  'Over 8.5 Cantos FT':   { wins: 14, total: 37 },  // 37.8%
   'Over 9.5 Cantos FT':   { wins: 8,   total: 30  },  // 27%
   'Over 10.5 Cantos FT':  { wins: 5,   total: 25  },  // 20%
   'Over 3.5 Cantos HT':   { wins: 45,  total: 70  },  // 64%
@@ -232,8 +233,11 @@ export class PreLiveMultipleAnalyzer {
     );
 
     if (tipo === 'cantos') {
-      // 🆕 Para cantos: usar lambda total (cantFTH + cantFTA)
-      const lambdaCantoTotal = (game?.cantFTH ?? 0) + (game?.cantFTA ?? 0);
+      // 🔥 FIX 1: Usar EXC do CSV em vez de soma inflada
+      const lambdaCantoTotal = Number(game?.exc ?? game?.exC ?? 0)
+        || ((game?.cantFTH ?? 0) + (game?.cantFTA ?? 0)) * 0.55; // fallback com fator de correção
+      
+      console.log(`[CANTO-LAMBDA] ${matchKey}: EXC=${game.exc} | lambdaUsado=${lambdaCantoTotal.toFixed(1)}`);
       
       // Buscar todas as chaves de cantos disponíveis
       const cantoKeys = Object.keys(realMarkets)
@@ -371,6 +375,22 @@ export class PreLiveMultipleAnalyzer {
         console.log(`[BINGO] Mercado de gols FT sem API real descartado: ${marketLabel} (CSV=${csvOdd}) - apenas API real permitida`);
         return { marketOdd: null, minOdd, source: 'csv-rejected' };
       }
+      
+      // 🔥 FIX 2: Para Over 8.5 Cantos FT, validar edge antes de aceitar CSV
+      if (marketLabel.includes("Over 8.5") && marketLabel.includes("Cantos FT")) {
+        const stats = MARKET_WIN_RATES['Over 8.5 Cantos FT'];
+        const realWinRate = stats.wins / stats.total; // 37.8%
+        const impliedProb = 1 / csvOdd;
+        const edge = realWinRate - impliedProb;
+        
+        // Só sugerir se edge > 0 (odd > 2.65)
+        if (edge <= 0) {
+          console.log(`[CANTO-FT] Over 8.5 sem edge: odd=${csvOdd} implica ${(impliedProb*100).toFixed(0)}% mas real é 37.8%`);
+          return { marketOdd: null, minOdd, source: 'csv-rejected' };
+        }
+        console.log(`[CANTO-FT] Over 8.5 com edge: odd=${csvOdd} edge=${(edge*100).toFixed(1)}%`);
+      }
+      
       return { marketOdd: csvOdd, minOdd, source: 'csv' };
     }
 
@@ -652,36 +672,63 @@ export class PreLiveMultipleAnalyzer {
       }
     }
     
-    // CANTOS FT — linha dinâmica
+    // CANTOS FT — validação via MARKET_WIN_RATES (sem Poisson inflado)
     if (fav.cantFavFT >= 3.5) {
-      const lambda = fav.cantFavFT;
-      const linhasCantos = [3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5];
+      // 🆕 Log de diagnóstico de cantos
+      const cantFTH = Number(game.cantFTH ?? 0);
+      const cantFTA = Number(game.cantFTA ?? 0);
+      const cantHTH = Number(game.cantHTH ?? 0);
+      const cantHTA = Number(game.cantHTA ?? 0);
+      const lambdaFT = cantFTH + cantFTA;
+      const lambdaHT = cantHTH + cantHTA;
+      const ratioHTFT = lambdaHT > 0 ? lambdaFT / lambdaHT : null;
+      const league = game.league ?? 'unknown';
       
-      let bestThreshold = null;
-      for (const linha of [...linhasCantos].reverse()) {
-        const prob = poissonProb(lambda, linha);
-        if (prob >= 0.70 && prob <= 0.82) {
-          bestThreshold = { linha, prob };
-          break;
+      // 🔥 FIX: validar pelo MARKET_WIN_RATES real em vez de Poisson inflado
+      const cantoLines = [
+        { label: 'Over 8.5 Cantos FT',  key: 'Over 8.5 Cantos FT' },
+        { label: 'Over 9.5 Cantos FT',  key: 'Over 9.5 Cantos FT' },
+        { label: 'Over 10.5 Cantos FT', key: 'Over 10.5 Cantos FT' },
+      ];
+
+      for (const line of cantoLines) {
+        const stats = MARKET_WIN_RATES[line.key];
+        if (!stats) continue;
+        const realWinRate = stats.wins / stats.total; // 37%, 27%, 20%
+        
+        // Só entrar se tiver odd real da API com edge positivo
+        const cantoOddResult = this.resolveRealOdd(matchKey, fav.nome, 'cantos', 0, game);
+        if (!cantoOddResult) continue; // sem odd real = não entra
+        
+        const impliedProb = 1 / cantoOddResult.odd;
+        const edge = realWinRate - impliedProb;
+        
+        if (edge > 0.05) { // edge mínimo de 5% (conservador)
+          console.log(`[CANTO-CALIBRADO] ${game.match}: ${line.label} @ ${cantoOddResult.odd} | edge=${(edge*100).toFixed(1)}% (real: ${(realWinRate*100).toFixed(0)}% vs implied: ${(impliedProb*100).toFixed(0)}%)`);
+          
+          ftMarkets.push({
+            label: line.label,
+            axis: 'cantosft',
+            odd: cantoOddResult.odd,
+            prob: realWinRate,   // prob real, não Poisson inflado
+            gold: edge >= 0.10,
+            source: 'api-real',
+          });
+          break; // usar apenas a primeira linha com edge positivo
+        } else {
+          console.log(`[CANTO-REJEITADO] ${game.match}: ${line.label} sem edge (real=${(realWinRate*100).toFixed(0)}% vs implied=${(impliedProb*100).toFixed(0)}%)`);
         }
       }
       
-      if (bestThreshold) {
-        // 🆕 Usar odds reais se disponíveis
-        const cantoOddResult = this.resolveRealOdd(matchKey, fav.nome, 'cantos', bestThreshold.linha, game);
-        const finalCantoOdd = cantoOddResult?.odd ?? 1.85;
-        const finalLinha = cantoOddResult?.linha ?? bestThreshold.linha;
-        
-        ftMarkets.push({
-          label: `${fav.nome} — Over ${finalLinha} Cantos FT`,
-          axis: 'cantosft',
-          odd: finalCantoOdd,
-          prob: bestThreshold.prob,
-          gold: bestThreshold.prob >= 0.80,
-          source: cantoOddResult ? 'api-real' : 'fallback',
-        });
-        console.log(`[FTBOX-SGP] ${fav.nome} cantos: lambda=${lambda.toFixed(1)} → linha=${finalLinha} prob=${(bestThreshold.prob*100).toFixed(0)}% odd=${finalCantoOdd} (${cantoOddResult ? 'api-real' : 'fallback'})`);
-      }
+      // Log diagnóstico mantido para análise
+      console.log(`[CANTO-DIAG] ${game.match}` 
+        + ` | league=${league}` 
+        + ` | profile=${profile}` 
+        + ` | lambdaFT=${lambdaFT.toFixed(1)}` 
+        + ` | lambdaHT=${lambdaHT.toFixed(1)}` 
+        + ` | ratioHT/FT=${ratioHTFT?.toFixed(2) ?? 'n/a'}` 
+        + ` | ftMarketsGerados=${ftMarkets.length}` 
+      );
     }
     
     return ftMarkets;
@@ -837,11 +884,15 @@ export class PreLiveMultipleAnalyzer {
       }
       
       // 🚫 FILTRO DE QUALIDADE — Score ≥ 45% E Confiança ≥ 35% (REDUZIDO TEMPORARIAMENTE)
-      const qualityGames = availableGames.filter(g => {
+      const qualityGames = availableGames.filter((g: any) => {
         const scoreResult = computeScore(g);
         const score = typeof scoreResult === 'number' ? scoreResult : scoreResult?.score || 0;
         const confResult = computeConfidence(g);
         const conf = confResult?.score || 0;
+        
+        // 🆕 Atribuir score e confidence ao objeto do jogo
+        g.score = score;        // valor entre 0 e 1
+        g.confidence = conf;    // valor entre 0 e 1
         
         // 🆕 Log detalhado para debugging
         console.log(`🔍 [QUALITY] ${g.match}: score=${(score*100).toFixed(1)}%, conf=${(conf*100).toFixed(1)}%`);
@@ -871,7 +922,7 @@ export class PreLiveMultipleAnalyzer {
       const suggestions = await this.generateQualityMultiples(qualityGames);
       console.log(` ${suggestions.length} múltiplas geradas por confluência`);
       
-      return {
+      const analysis = {
         suggestions,
         summary: {
           totalGames: upcomingGames.length,
@@ -884,6 +935,109 @@ export class PreLiveMultipleAnalyzer {
         // 🆕 Adicionar jogos processados com patternLines
         games: qualityGames
       };
+
+      // 🆕 Após todos os builders (Bingo, FTBOX, etc.), popular mainMarket e combo
+      for (const game of analysis.games as any[]) {
+
+        // FIX 1: usar getFavorito() — já importado e funciona corretamente
+        const fav = getFavorito(game);
+        const isFavHome = (fav.nome ?? (game as any).home) === (game as any).home;
+        const favName = fav.nome ?? (game as any).home;
+
+        // FIX 2: campos corretos de HT baseados no favorito real
+        const chHTFav = Number(isFavHome ? (game as any).chHTH : (game as any).chHTA) ?? 0;
+        const cantHT  = Number(isFavHome ? (game as any).cantHTH : (game as any).cantHTA) ?? 0;
+        const xg = Number(game.exG ?? (game as any).exGraw ?? 0);
+
+        // FIX 2b: hitRate confiável — CSV apenas se amostra razoável (50-90%)
+        // fora desse range usa a taxa histórica real do MARKET_WIN_RATES
+        const baseHitRate05HT = MARKET_WIN_RATES['Over 0.5 Gols HT'].wins / MARKET_WIN_RATES['Over 0.5 Gols HT'].total;
+        const rawHitRateCSV = Number(isFavHome ? (game as any).gol05HTH : (game as any).gol05HTA) ?? 0;
+        const csvHitRate = rawHitRateCSV > 1 ? rawHitRateCSV / 100 : rawHitRateCSV;
+        const hitRate = (csvHitRate >= 0.50 && csvHitRate <= 0.90) ? csvHitRate : baseHitRate05HT;
+
+        console.log(`[PANORAMA-MAIN] ${(game as any).match}: fav=${favName} isFavHome=${isFavHome} hitRate=${(hitRate*100).toFixed(0)}% chHTFav=${chHTFav} cantHT=${cantHT} xg=${xg.toFixed(2)}`);
+
+        // FIX 5: odds reais via realOddsMap (evita depender do oddsMap externo que pode estar vazio)
+        const matchKey = `${(game as any).home} x ${(game as any).away}`;
+        const realMarkets = (this as any).realOddsMap?.[matchKey] ?? {};
+        const oddHT05 = realMarkets['Over 0.5 Gols HT'] ?? null;
+        const oddFT15 = realMarkets['Over 1.5 FT'] ?? null;
+
+        // 🔥 FIX: Ranqueamento baseado em TRIGGER_MAP
+        
+        // FIX 1 — Descobrir o nome real do campo BTTS
+        console.log(`[ALL-KEYS] ${(game as any).match}:`,
+          Object.keys(game as any)
+            .filter(k => k.toLowerCase().includes('amb')
+                      || k.toLowerCase().includes('btts')
+                      || k.toLowerCase().includes('marc')
+                      || k.toLowerCase().includes('perc')
+                      || k.toLowerCase().includes('gol')
+                      || k.toLowerCase().includes('%'))
+            .map(k => `${k}=${(game as any)[k]}`)
+            .join(' | ')
+        );
+        
+        // 🆕 Usar TRIGGER_MAP para obter mercados elegíveis
+        const eligible = getEligibleMarkets(game as any);
+        
+        console.log(`[ELIGIBLE] ${(game as any).match}: ${eligible.length} mercados elegíveis → ${eligible.join(' | ')}`);
+
+        // Se eligibleMarkets for vazio → jogo não entra no bilhete
+        if (eligible.length === 0) {
+          console.log(`[SKIP] ${(game as any).match}: sem mercados elegíveis`);
+          (game as any).mainMarket = {
+            label: 'Over 1.5 FT',
+            odd: realMarkets['Over 1.5 FT'] ?? 1.75,
+            minOdd: 1.50,
+            source: 'fallback-no-eligible',
+          };
+          // Continuar com o processamento normal em vez de return
+        }
+
+        // Hierarquia: Over 0.5 HT > Ambas Marcam > Over 1.5 FT > Over 2.5 FT > Under 2.5 FT
+        const hierarchy = [
+          'Over 0.5 Gols HT',
+          'Ambas Marcam Sim',
+          'Over 1.5 FT',
+          'Over 2.5 FT',
+          'Under 2.5 FT',
+        ];
+
+        const chosen = hierarchy.find(m => eligible.includes(m));
+
+        if (chosen) {
+          (game as any).mainMarket = {
+            label: chosen,
+            odd: realMarkets[chosen] ?? (game as any)[`odd${chosen.replace(/\s/g,'')}`] ?? 1.75,
+            hitRate: MARKET_WIN_RATES[chosen]
+              ? MARKET_WIN_RATES[chosen].wins / MARKET_WIN_RATES[chosen].total
+              : 0.65,
+            source: `gatilho: ${chosen}`,
+          };
+        }
+
+        // Combo: pegar elegíveis restantes (exceto o principal), até 2
+        (game as any).combo = hierarchy
+          .filter(m => eligible.includes(m) && m !== chosen)
+          .slice(0, 2)
+          .map(m => ({
+            label: m,
+            odd: realMarkets[m] ?? 1.75,
+            hitRate: MARKET_WIN_RATES[m]
+              ? MARKET_WIN_RATES[m].wins / MARKET_WIN_RATES[m].total
+              : 0.65,
+          }));
+
+        console.log(`[MAIN-SELECTED] ${(game as any).match}: ` 
+  + `${(game as any).mainMarket?.label} ` 
+  + `@ ${(game as any).mainMarket?.odd} ` 
+  + `(${((game as any).mainMarket?.hitRate * 100).toFixed(0)}% histórico)` 
+);
+      }
+
+      return analysis;
     } catch (error) {
       console.error(' Erro na análise pré-live:', error);
       return {
@@ -904,17 +1058,6 @@ export class PreLiveMultipleAnalyzer {
   private async buildBingoSeguroInternal(games: any[]): Promise<LiveMultipleSuggestion | null> {
     console.log('[BINGO-SEGURO] Construindo bilhete seguro com edge real...');
     
-    // Mercados permitidos para o Bingo Seguro (labels normalizados)
-    const allowedMarkets = [
-      "Ambas Marcam — Sim",
-      "Over 2.5 FT",
-      "Over 1.5 FT", 
-      "Over 8.5 Cantos FT",
-      "Over 9.5 Cantos FT",
-      "Over 10.5 Cantos FT",
-      "Over 0.5 Gols HT"
-    ];
-
     // Top 3-4 jogos por score
     const topGames = games
       .sort((a, b) => {
@@ -933,12 +1076,21 @@ export class PreLiveMultipleAnalyzer {
       if (selections.length >= 4) break;
       if (usedGames.has(g.match)) continue;
 
-      // Encontrar mercado com maior edge real entre os permitidos
+      // 🆕 Usar TRIGGER_MAP para obter mercados elegíveis
+      const allMarkets = getEligibleMarkets(g);
+      if (allMarkets.length === 0) {
+        console.log(`[BINGO-SEGURO] Jogo sem mercados elegíveis: ${g.match}`);
+        continue;
+      }
+
+      console.log(`[BINGO-SEGURO] ${g.match}: ${allMarkets.length} mercados elegíveis → ${allMarkets.join(' | ')}`);
+
+      // Encontrar mercado com maior edge real entre os elegíveis
       let bestMarket = null;
       let bestEdge = -Infinity;
       let bestSelection = null;
 
-      for (const market of allowedMarkets) {
+      for (const market of allMarkets) {
         const resolution = this.resolveOdd(g, market);
         if (resolution.marketOdd && resolution.marketOdd >= 1.80) {
           // 🆕 Proteção contra odds anormais
@@ -1091,22 +1243,14 @@ export class PreLiveMultipleAnalyzer {
 
       console.log(`[BINGO-ALAVANC] Analisando jogo ${g.match} (${currentGameMarkets + 1}/${MAX_MARKETS_PER_GAME} mercados)`);
 
-      // 🆕 Mercados disponíveis expandidos para mais oportunidades (labels normalizados)
-      const allMarkets = [
-        "Ambas Marcam — Sim",
-        "Over 2.5 FT",
-        "Over 1.5 FT",
-        "Over 0.5 Gols HT",
-        "Casa para vencer",
-        "Visitante para vencer",
-        "Over 8.5 Cantos FT",
-        "Over 9.5 Cantos FT",
-        "Over 10.5 Cantos FT",
-        "Dupla Chance - Empate ou Casa",
-        "Dupla Chance - Empate ou Visitante",
-        "Over 3.5 FT",
-        "Under 2.5 FT",
-      ];
+      // 🆕 Usar TRIGGER_MAP para obter mercados elegíveis
+      const allMarkets = getEligibleMarkets(g);
+      if (allMarkets.length === 0) {
+        console.log(`[BINGO-ALAVANC] Jogo sem mercados elegíveis: ${g.match}`);
+        continue;
+      }
+
+      console.log(`[BINGO-ALAVANC] ${g.match}: ${allMarkets.length} mercados elegíveis → ${allMarkets.join(' | ')}`);
 
       // 🆕 Encontrar TODOS os mercados com edge positivo
       const validMarkets: any[] = [];

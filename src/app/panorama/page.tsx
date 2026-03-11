@@ -29,125 +29,55 @@ function GameCard({ game }: { game: any }) {
   const poison = game.poison;
   const isPoisonActive = poison?.isPoison && poison.triggers?.length > 0;
   const primaryTrigger = isPoisonActive ? poison.primaryTrigger : null;
-  const poisonGlow = primaryTrigger?.color ?? null;
 
-  // ── CALCULAR EV POR LINHA ─────────────────────────────
-  // Para mainMarket: usar confidence do jogo como proxy de hit rate
-  // Para combo com hitRate explícito (ex: 88%): usar direto
-  // Para combo sem hitRate: usar confidence * 0.85 (desconto de incerteza)
-  const gameConf = game.confidence
-    ? Number(game.confidence) > 1
-      ? Number(game.confidence) / 100  // vem como 82 → divide
-      : Number(game.confidence)        // vem como 0.82 → usa direto
-    : Number(game.score ?? 0)          // score já é 0-1, não divide
-
-  const calcEV = (odd: number, prob: number | null) => {
-    if (!prob || !odd || odd < 1.10) return null
-    return (prob * odd) - 1
-  }
-
-  const getValueTag = (ev: number | null, odd: number | null, minOdd: number | null = null, source: string | null = null) => {
-    // 🆕 Reforma Odds: Verificar se odd real é suficiente
-    if (source === 'estimated') {
-      return { label: `~${odd?.toFixed(2) ?? minOdd?.toFixed(2)} estimada`, color: '#8b949e' }
-    }
-    
-    if (odd !== null && minOdd !== null && odd < minOdd) {
-      return { label: `⚠️ Odd baixa (${odd.toFixed(2)} < ${minOdd.toFixed(2)})`, color: '#f85149' }
-    }
-    
-    if (odd === null && minOdd !== null) {
-      return { label: `Mín. EV: ${minOdd.toFixed(2)}`, color: '#555' }
-    }
-    
-    if (ev === null) return { label: 'Sem dado', color: '#555' }
-    if (ev >= 0.20) return { label: '🔥 Alto EV', color: '#3fb950' }
-    if (ev >= 0.08) return { label: '✅ Tem valor', color: '#58a6ff' }
-    if (ev >= 0.00) return { label: '⚠️ Marginal', color: '#f0c040' }
-    return { label: '❌ Sem valor', color: '#f85149' }
-  }
-
-  const isCorrelated = (line1: any, line2: any) => {
-    // Simplificado: considerar correlacionado se compartilham palavras-chave
-    const getKeywords = (label: string) => 
-      label.toLowerCase().split(/\s+/).filter(w => w.length > 3)
-    
-    const keywords1 = getKeywords(line1.label)
-    const keywords2 = getKeywords(line2.label)
-    
-    return keywords1.some(k => keywords2.includes(k)) || 
-           keywords2.some(k => keywords1.includes(k))
-  }
-
-  // ── SEPARAR LINHAS POR CAMADA ─────────────────────────
-  const mainLine = game.mainMarket?.label ? {
+  // ── 1. DADOS BRUTOS (main + combo deduplicado) ────────────────────────
+  const mainLine = game.mainMarket ? {
     label: game.mainMarket.label,
-    odd: Number(game.mainMarket.odd ?? 0),
-    minOdd: Number(game.mainMarket.minOdd ?? 0), // 🆕 Reforma Odds
-    source: game.mainMarket.source ?? null, // 🆕 Adicionar source
-    prob: gameConf,           // validado pelo engine completo
-    sourceLabel: 'Principal',
-    sourceColor: '#f0c040',
-    isPrimary: true,
+    odd: game.mainMarket.odd,
+    prob: game.mainMarket.hitRate,
+    minOdd: game.mainMarket.minOdd,
+    source: game.mainMarket.source,
   } : null
 
-  // ── 1. DEDUPLICAR combo (remove linhas iguais ao mainMarket) ──────
-  const dedupedComboLines = (game.combo ?? [])
-    .filter((c: any) => c.label !== game.mainMarket?.label)
-    .map((c: any) => {
-      const hitMatch = c.label?.match(/\((\d+)%\)/)
-      const hitRate = hitMatch ? Number(hitMatch[1]) / 100 : gameConf * 0.85
-      return {
-        label: c.label,
-        odd: Number(c.odd ?? 0),
-        minOdd: Number(c.minOdd ?? 0), // 🆕 Reforma Odds
-        source: c.source ?? null, // 🆕 Adicionar source
-        prob: hitRate,
-        sourceLabel: hitMatch ? `${hitMatch[1]}% histórico` : 'Engine',
-        sourceColor: hitMatch ? '#3fb950' : '#8b949e',
-        isPrimary: false,
+  // Deduplicar combo: remover labels idênticos, manter maior prob
+  const dedupedComboLines = (game.combo || [])
+    .filter((c: any) => c.label && c.hitRate != null)
+    .reduce((acc: any[], curr: any) => {
+      const existing = acc.find(l => l.label === curr.label)
+      if (!existing || curr.hitRate > existing.hitRate) {
+        if (existing) {
+          const idx = acc.indexOf(existing)
+          acc[idx] = curr
+        } else {
+          acc.push(curr)
+        }
       }
-    })
+      return acc
+    }, [])
+    .map((c: any) => ({
+      label: c.label,
+      odd: c.odd,
+      prob: c.hitRate,
+      minOdd: c.minOdd,
+      source: c.source,
+    }))
 
-  const patternLines = (game.patternLines ?? []).map((p: any) => ({
-    label: p.label,
-    odd: Number(p.odd ?? 0),
-    minOdd: Number(p.minOdd ?? 0), // 🆕 Reforma Odds
-    source: p.source ?? null, // 🆕 Adicionar source
-    prob: p.hitRate ?? null,
-    sourceLabel: p.hitRate ? `${Math.round(p.hitRate*100)}% Poisson` : 'Poisson',
-    sourceColor: '#58a6ff',
-    isPrimary: false,
-  }))
+  // ── 2. MAIOR PROBABILIDADE (em vez de ranking por EV) ─────────────────
+  const allLines = [...(mainLine ? [mainLine] : []), ...dedupedComboLines]
+    .filter(l => l.prob !== null)
+    .sort((a, b) => b.prob - a.prob) // Ordenar por hitRate decrescente
 
-  // ── 2. RANKING — main + combo deduplicado ────────────────────────
-  const allRanked = [...(mainLine ? [mainLine] : []), ...dedupedComboLines]
-    .filter(l => l.odd >= 1.20 && l.prob !== null)
-    .map(l => ({ ...l, ev: calcEV(l.odd, l.prob) }))
-    .sort((a, b) => (b.ev ?? -1) - (a.ev ?? -1))
+  const bestProb = allLines[0] ?? null
 
-  const bestBet = allRanked[0] ?? null
-  
-  // ── 3. LÓGICA DA DUPLA ────────────────────────────────────────────
-  let bestDouble: any = null
-
-  if (isPoisonActive && mainLine) {
-    // Poison ativo → dupla SEMPRE inclui mainLine (linha do engine)
-    // Parceiro = maior EV que NÃO seja o mainLine
-    const partner = allRanked.find(l => l.label !== mainLine.label) ?? null
-    if (partner) {
-      // Se bestBet já é o mainLine, parceiro é a 2ª linha
-      // Se bestBet é outra linha, força mainLine como 2ª perna
-      bestDouble = bestBet?.label === mainLine.label ? partner : mainLine
-    }
-  } else {
-    // Sem Poison → top 2 por EV, não correlacionados
-    const second = allRanked[1]
-    bestDouble = second && !isCorrelated(allRanked[0], second) ? second : null
-  }
-      
-  const doubleOdd = bestBet && bestDouble
-    ? (bestBet.odd * bestDouble.odd).toFixed(2) : null
+  // ── 3. BARRA VISUAL DE PROBABILIDADE ────────────────────────────────
+  const ProbBar = ({ prob }: { prob: number }) => (
+    <div style={{
+      height: 4, borderRadius: 2,
+      background: `linear-gradient(to right,
+        #3fb950 ${prob*100}%,
+        #21262d ${prob*100}%)`
+    }} />
+  )
 
   return (
     <div style={{
@@ -159,7 +89,7 @@ function GameCard({ game }: { game: any }) {
       marginBottom: 12,
     }}>
 
-      {/* HEADER — igual ao atual */}
+      {/* HEADER */}
       <div style={{ display:'flex', justifyContent:'space-between',
         alignItems:'center', marginBottom:10, flexWrap:'wrap', gap:6 }}>
         <span style={{ color:'#8b949e', fontSize:13 }}>
@@ -167,6 +97,7 @@ function GameCard({ game }: { game: any }) {
         </span>
         <div style={{ display:'flex', gap:6, alignItems:'center' }}>
           {game.profile && <ProfileBadge profile={game.profile} />}
+          {game.poison?.isPoison && <PoisonBadges poison={game.poison} />}
           <span style={{ color:tierStyle.color, fontSize:13,
             fontWeight:700 }}>
             {tierStyle.label} {score}%
@@ -197,122 +128,69 @@ function GameCard({ game }: { game: any }) {
         </span>
       </div>
 
-      {/* ── BLOCO PRINCIPAL ─── */}
-      {mainLine && (
-        <div style={{ background: '#0d2818', border: '1px solid #3fb950',
+      {/* ── 🎯 MAIOR PROBABILIDADE ─── */}
+      {bestProb && (
+        <div style={{ background: '#1c2128', border: '1px solid #58a6ff',
           borderRadius: 10, padding: '12px 14px', marginBottom: 8 }}>
-          <div style={{ fontSize: 11, color: '#f0c040', fontWeight: 700,
-            marginBottom: 4 }}>
-            🎯 LINHA PRINCIPAL
-            {isPoisonActive && (
-              <span style={{ marginLeft: 8, color: primaryTrigger?.color }}>
-                {primaryTrigger?.icon} {primaryTrigger?.tag}
+          <div style={{ fontSize: 10, color: '#58a6ff', fontWeight: 700,
+            marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>
+            🎯 Maior Probabilidade
+          </div>
+          <div style={{ fontSize: 14, color: '#e6edf3', marginBottom: 4, fontWeight: 600 }}>
+            {bestProb.label}
+          </div>
+          <ProbBar prob={bestProb.prob} />
+          <div style={{ fontSize: 11, color: '#8b949e', marginTop: 4 }}>
+            {(bestProb.prob * 100).toFixed(0)}% histórico
+            {bestProb.source === 'api-real' ? (
+              <span style={{ color: '#3fb950', marginLeft: 8 }}>
+                odd: {bestProb.odd.toFixed(2)} ✅ EV +{((bestProb.prob * bestProb.odd) - 1).toFixed(0)}%
+              </span>
+            ) : (
+              <span style={{ color: '#8b949e', marginLeft: 8 }}>
+                odd: — (verificar na casa)
               </span>
             )}
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between',
-            alignItems: 'center' }}>
-            <span style={{ fontWeight: 700, fontSize: 14, color: '#e6edf3' }}>
-              {mainLine.label}
-            </span>
-            <span style={{ fontWeight: 700, fontSize: 16 }}>
-              {mainLine.odd > 0 ? mainLine.odd.toFixed(2) : mainLine.minOdd > 0 ? `Mín: ${mainLine.minOdd.toFixed(2)}` : 'sem odd'}
-            </span>
-          </div>
-          {/* EV da linha principal */}
-          {(() => {
-            const ev = calcEV(mainLine.odd, mainLine.prob)
-            const tag = getValueTag(ev, mainLine.odd, mainLine.minOdd, mainLine.source)
-            return (
-              <div style={{ display: 'flex', gap: 8, marginTop: 6,
-                alignItems: 'center' }}>
-                <span style={{ fontSize: 11, fontWeight: 600,
-                  color: tag.color, background: `${tag.color}15`,
-                  padding: '2px 6px', borderRadius: 4 }}>
-                  {tag.label}
-                </span>
-                {ev !== null && (
-                  <span style={{ fontSize: 11, color: '#8b949e' }}>
-                    EV {ev >= 0 ? '+' : ''}{(ev * 100).toFixed(0)}%
-                  </span>
-                )}
-              </div>
-            )
-          })()}
         </div>
       )}
 
-      {/* ── LINHAS COMPLEMENTARES ─── */}
+      {/* ── COMPLEMENTARES ─── */}
       {dedupedComboLines.length > 0 && (
         <div style={{ marginBottom: 8 }}>
           <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 4,
             textTransform: 'uppercase', letterSpacing: 1 }}>
-            Linhas Complementares
+            Complementares
           </div>
-          {dedupedComboLines.map((line: any, i: number) => {
-            const ev = calcEV(line.odd, line.prob)
-            const tag = getValueTag(ev, line.odd, line.minOdd, line.source)
-            return (
-              <div key={i} style={{ display: 'flex', alignItems: 'center',
-                gap: 8, padding: '7px 10px', background: '#161b22',
-                borderRadius: 6, border: '1px solid #30363d' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <div style={{ width: 8, height: 8, borderRadius: '50%',
-                    background: line.sourceColor }} />
-                  <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    <div style={{ fontSize: 12, color: '#e6edf3',
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {line.label}
-                    </div>
-                    <div style={{ fontSize: 10, color: '#8b949e', marginTop: 1 }}>
-                      {line.prob !== null ? `${(line.prob * 100).toFixed(0)}% prob` : 'sem prob'}
-                    </div>
-                  </div>
+          {dedupedComboLines
+            .sort((a: any, b: any) => b.prob - a.prob) // Ordenar por prob decrescente
+            .map((line: any, i: number) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center',
+              gap: 8, padding: '7px 10px', background: '#161b22',
+              borderRadius: 6, border: '1px solid #30363d', marginBottom: 4 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, color: '#e6edf3', marginBottom: 2 }}>
+                  {line.label}
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: '#e6edf3' }}>
-                    {line.odd > 0 ? line.odd.toFixed(2) : line.minOdd > 0 ? `Mín: ${line.minOdd.toFixed(2)}` : 'sem odd'}
-                  </span>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                    <span style={{ fontSize: 10, color: tag.color }}>
-                      {tag.label}
-                    </span>
-                    {ev !== null && (
-                      <span style={{ fontSize: 10, color: '#555' }}>
-                        EV {ev >= 0 ? '+' : ''}{(ev*100).toFixed(0)}%
-                      </span>
-                    )}
-                  </div>
+                <ProbBar prob={line.prob} />
+                <div style={{ fontSize: 10, color: '#8b949e', marginTop: 2 }}>
+                  {(line.prob * 100).toFixed(0)}% histórico
                 </div>
               </div>
-            )
-          })}
-        </div>
-      )}
-
-      {/* ── RECOMENDAÇÃO DE ENTRADA ─── */}
-      {bestBet && (
-        <div style={{ background: '#1c2128', border: '1px solid #58a6ff',
-          borderRadius: 10, padding: '10px 14px', marginTop: 4 }}>
-          <div style={{ fontSize: 10, color: '#58a6ff', fontWeight: 700,
-            marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>
-            💡 Entrada Sugerida
-          </div>
-          <div style={{ fontSize: 13, color: '#e6edf3', marginBottom: 4 }}>
-            <strong>Singular:</strong> {bestBet.label} @ {bestBet.odd.toFixed(2)}
-          </div>
-          {bestDouble && (
-            <div style={{ fontSize: 13, color: '#8b949e' }}>
-              <strong style={{ color: '#c9d1d9' }}>Dupla:</strong>{' '}
-              {bestBet.label} + {bestDouble.label}{' '}
-              <strong style={{ color: '#f0c040' }}>@ {doubleOdd}</strong>
-              {isPoisonActive && (
-                <span style={{ color: primaryTrigger?.color, marginLeft: 6 }}>
-                  🔥 Poison
-                </span>
-              )}
+              <div style={{ fontSize: 11, color: '#8b949e', textAlign: 'right' }}>
+                {line.source === 'api-real' ? (
+                  <>
+                    <div>odd: {line.odd.toFixed(2)}</div>
+                    <div style={{ color: '#3fb950' }}>
+                      ✅ EV +{((line.prob * line.odd) - 1).toFixed(0)}%
+                    </div>
+                  </>
+                ) : (
+                  <div>—</div>
+                )}
+              </div>
             </div>
-          )}
+          ))}
         </div>
       )}
 
@@ -330,7 +208,7 @@ export default function PanoramaPage() {
   const { results, summary, loading, todayGames, lastCsvText } = useBacktest();
 
   // Estado da data selecionada (default = hoje)
-  const [selectedDate, setSelectedDate] = useState(todayDDMM);
+  const [selectedDate, setSelectedDate] = useState(todayStr);
   
   // Converter YYYY-MM-DD → DDMM para o analyzer
   const selectedDDMM = selectedDate.slice(8,10) + selectedDate.slice(5,7);
@@ -446,21 +324,20 @@ export default function PanoramaPage() {
       list = [...nsGames];
 
     } else if (selectedDate === todayStr) {
-      // CASO 2: Hoje → fonte é DB (todayGames), enriquecida com patternLines
-      const baseMap = new Map<string, any>();
-      const dbList = todayGames.length > 0 ? todayGames : results;
-      dbList.forEach((g: any) => {
-        const key = g.match || `${g.home} x ${g.away}`;
-        baseMap.set(key, g);
-      });
-      nsGames.forEach((ng: any) => {
-        const key = ng.match || `${ng.home} x ${ng.away}`;
-        const base = baseMap.get(key);
-        if (base && ng.patternLines?.length) {
-          baseMap.set(key, { ...base, patternLines: ng.patternLines });
-        }
-      });
-      list = Array.from(baseMap.values());
+      // CASO 2: Hoje → priorizar nsGames processados pelo analyzer
+      if (nsGames.length > 0) {
+        // nsGames tem os jogos de hoje processados pelo analyzer — usar direto
+        list = [...nsGames];
+      } else {
+        // fallback: DB sem analyzer
+        const baseMap = new Map<string, any>();
+        const dbList = todayGames.length > 0 ? todayGames : results;
+        dbList.forEach((g: any) => {
+          const key = g.match || `${g.home} x ${g.away}`;
+          baseMap.set(key, g);
+        });
+        list = Array.from(baseMap.values());
+      }
 
     } else {
       // CASO 3: Data passada → filtrar results pelo dia selecionado
@@ -592,19 +469,10 @@ export default function PanoramaPage() {
               <span style={{ color: C.muted, fontSize: 13 }}>Data:</span>
               <input
                 type="date"
-                value={(() => {
-                  // Converter DDMM para YYYY-MM-DD para o input
-                  if (!selectedDate || selectedDate.length !== 4) return todayStr;
-                  const day = selectedDate.slice(0, 2);
-                  const month = selectedDate.slice(2, 4);
-                  const year = new Date().getFullYear();
-                  return `${year}-${month}-${day}`;
-                })()}
+                value={selectedDate}
                 onChange={e => {
-                  // Converter YYYY-MM-DD para DDMM para o estado
-                  const ymd = e.target.value;
-                  const ddmm = ymd.slice(8,10) + ymd.slice(5,7);
-                  setSelectedDate(ddmm);
+                  // Manter YYYY-MM-DD para o estado
+                  setSelectedDate(e.target.value);
                 }}
                 style={{
                   background: C.card,

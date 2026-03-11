@@ -59,6 +59,11 @@ function extractOdds(rowValues) {
     const n = toNum(rowValues[9 + i]);
     if (n !== null) odds[names[i]] = n;
   }
+  
+  // Mapeamento direto para colunas específicas
+  const oddBTTS = toNum(rowValues[12]); // col[12] → oddBTTS
+  if (oddBTTS !== null) odds["Odds Ambas marcarem (Sim)"] = oddBTTS;
+  
   return odds;
 }
 
@@ -311,6 +316,25 @@ function buildEngineIndex(headers) {
       /avg\s*ataques\s*perigosos/i,
       /appg/i,
     ], 47), // NOVO: índice 47 para AVG ataques perigosos
+    
+    // 🆕 COLUNAS FALTANTES - MAPEAMENTO DIRETO
+    perc25H: 12, // col[16] → perc25H/perc25A (índice 12 no array de pipe)
+    perc25A: 12, // col[16] → perc25H/perc25A
+    
+    percBTTSH: 13,  // col[37] → percBTTSH/percBTTSA (índice 13 no array de pipe)
+    percBTTSA: 13,  // col[37] → percBTTSH/percBTTSA
+    
+    cant010H: 14,   // col[39] → cant010H/cant010A (índice 14 no array de pipe)
+    cant010A: 14,   // col[39] → cant010H/cant010A
+    
+    cant1120H: 15,  // col[40] → cant1120H/cant1120A (índice 15 no array de pipe)
+    cant1120A: 15,  // col[40] → cant1120H/cant1120A
+    
+    perc4CantHTH: 16, // col[21] → perc4CantHTH/perc4CantHTA (índice 16 no array de pipe)
+    perc4CantHTA: 16, // col[21] → perc4CantHTH/perc4CantHTA
+    
+    perc5CantHTH: 17, // col[22] → perc5CantHTH/perc5CantHTA (índice 17 no array de pipe)
+    perc5CantHTA: 17, // col[22] → perc5CantHTH/perc5CantHTA
   };
 }
 
@@ -533,6 +557,14 @@ export function parseCSV(text) {
     const cantos37HT = toPipe(v[idx.cantos_37_ht]); // 🆕 Campo novo: cantos 37-HT
     const asPrecisao = toPipe(v[idx.as_precisao]); // 🆕 Campo novo: AS % Precisão (corrigido)
     const appgPipe   = toPipe(v[idx.appg]); // 🆕 Campo novo: AVG ataques perigosos
+    
+    // 🆕 COLUNAS FALTANTES - EXTRAÇÃO DIRETA
+    const perc25Pipe     = toPipe(v[16]); // col[16] → perc25H/perc25A
+    const percBTTSPipe   = toPipe(v[37]); // col[37] → percBTTSH/percBTTSA
+    const cant010Pipe    = toPipe(v[39]); // col[39] → cant010H/cant010A
+    const cant1120Pipe   = toPipe(v[40]); // col[40] → cant1120H/cant1120A
+    const perc4CantHTPipe = toPipe(v[21]); // col[21] → perc4CantHTH/perc4CantHTA
+    const perc5CantHTPipe = toPipe(v[22]); // col[22] → perc5CantHTH/perc5CantHTA
 
     const odds = extractOdds(v);
 
@@ -600,6 +632,20 @@ export function parseCSV(text) {
       asPrecisaoA:  asPrecisao.a ?? 0,   // 🆕 Novo campo: AS % Precisão
       appgH:        appgPipe.h   ?? 0,   // 🆕 Novo campo: AVG ataques perigosos
       appgA:        appgPipe.a   ?? 0,   // 🆕 Novo campo: AVG ataques perigosos
+      
+      // 🆕 COLUNAS FALTANTES - CAMPOS NO OBJETO
+      perc25H:      perc25Pipe.h     ?? 0, // col[16] → perc25H/perc25A
+      perc25A:      perc25Pipe.a     ?? 0, // col[16] → perc25H/perc25A
+      percBTTSH:    percBTTSPipe.h   ?? 0, // col[37] → percBTTSH/percBTTSA
+      percBTTSA:    percBTTSPipe.a   ?? 0, // col[37] → percBTTSH/percBTTSA
+      cant010H:     cant010Pipe.h    ?? 0, // col[39] → cant010H/cant010A
+      cant010A:     cant010Pipe.a    ?? 0, // col[39] → cant010H/cant010A
+      cant1120H:    cant1120Pipe.h   ?? 0, // col[40] → cant1120H/cant1120A
+      cant1120A:    cant1120Pipe.a   ?? 0, // col[40] → cant1120H/cant1120A
+      perc4CantHTH:  perc4CantHTPipe.h ?? 0, // col[21] → perc4CantHTH/perc4CantHTA
+      perc4CantHTA:  perc4CantHTPipe.a ?? 0, // col[21] → perc4CantHTH/perc4CantHTA
+      perc5CantHTH:  perc5CantHTPipe.h ?? 0, // col[22] → perc5CantHTH/perc5CantHTA
+      perc5CantHTA:  perc5CantHTPipe.a ?? 0, // col[22] → perc5CantHTH/perc5CantHTA
       // Adicionar objeto AF para getFavorito
       af:          { h: afH, a: afA },
       odds,

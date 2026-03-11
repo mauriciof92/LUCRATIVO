@@ -1,0 +1,1 @@
+        console.log(`[MAIN-SELECTED] ${(game as any).match}: ${(game as any).mainMarket.label} @ ${(game as any).mainMarket.odd} (${(game as any).mainMarket.hitRate*100).toFixed(0)}% histórico)`);
