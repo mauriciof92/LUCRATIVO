@@ -1170,14 +1170,13 @@ export class PreLiveMultipleAnalyzer {
       console.log('[ODDS-DEBUG] Amostra de odds dos jogos:');
       for (let i = 0; i < Math.min(3, qualityGames.length); i++) {
         const game = qualityGames[i];
+        const oddsObj = game.odds as any;
         console.log('[ODDS-DEBUG]', game.match, {
           oddsMap:    JSON.stringify(game.odds ?? {}),
-          hasRealOdds: game.hasRealOdds,
-          percMais25: game.percMais25Gols, // % histórico Over 2.5
           // Verificar odds específicas no objeto odds
-          over25FT: game.odds?.["Odds Mais de 2.5 gols FT"],
-          bttsYes: game.odds?.["Odds Ambas marcarem (Sim)"],
-          over05HT: game.odds?.["Odds Mais de 0.5 gols 1T"],
+          over25FT: oddsObj?.["Odds Mais de 2.5 gols FT"],
+          bttsYes: oddsObj?.["Odds Ambas marcarem (Sim)"],
+          over05HT: oddsObj?.["Odds Mais de 0.5 gols 1T"],
         });
       }
       
