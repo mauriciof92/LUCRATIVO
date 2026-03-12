@@ -2,6 +2,24 @@
 
 export type TriggerFn = (g: Record<string, any>) => boolean;
 
+// 🆕 Importar novo motor Poisson
+import { evaluateAllMarkets, TriggerEval, TriggerStatus } from './trigger-engine';
+import { gameToMatchInput } from './trigger-adapter';
+
+// Feature flag para alternar entre sistemas (default: false para segurança)
+const USE_NEW_TRIGGER_ENGINE = true;
+
+// 🆕 Mapeamento MercadoId → Nome Legado
+const MARKET_ID_TO_LEGACY: Record<string, string> = {
+  'OVER_05_HT': 'Over 0.5 Gols HT',
+  'OVER_15_FT': 'Over 1.5 FT',
+  'OVER_25_FT': 'Over 2.5 FT',
+  'BTTS_YES': 'Ambas Marcam Sim',
+  'UNDER_25_FT': 'Under 2.5 FT',
+  'CORNERS_FT': 'Over 8.5 Cantos FT',
+  'SHOTS_HT': 'Finalizações HT',
+};
+
 export const TRIGGER_MAP: Record<string, TriggerFn> = {
 
   // ── GOLS HT ──────────────────────────────────────────────
@@ -119,16 +137,68 @@ export const TRIGGER_MAP: Record<string, TriggerFn> = {
 
 };
 
-// Retorna apenas os mercados elegíveis para um jogo
-export function getEligibleMarkets(game: Record<string, any>): string[] {
+// 🆕 Função wrapper que usa novo motor Poisson com fallback para sistema antigo
+function getEligibleMarketsNew(game: Record<string, any>): string[] {
+  try {
+    // Converter jogo para MatchInput
+    const matchInput = gameToMatchInput(game);
+    
+    // Avaliar todos os mercados com novo motor
+    const evaluations: TriggerEval[] = evaluateAllMarkets(matchInput);
+    
+    // Filtrar mercados aprovados ou em review
+    const approvedMarkets = evaluations
+      .filter(evaluation => evaluation.status === 'APPROVED' || evaluation.status === 'REVIEW')
+      .map(evaluation => MARKET_ID_TO_LEGACY[evaluation.marketId])
+      .filter(Boolean);
+
+    // Log detalhado para debugging
+    const approvedDetails = evaluations
+      .filter(evaluation => evaluation.status === 'APPROVED' || evaluation.status === 'REVIEW')
+      .map(evaluation => {
+        const legacyName = MARKET_ID_TO_LEGACY[evaluation.marketId];
+        const statusIcon = evaluation.status === 'APPROVED' ? '✅' : '⚠️';
+        const edgeInfo = evaluation.edgePct ? `+${evaluation.edgePct.toFixed(1)}%` : 'N/A';
+        const confInfo = `${evaluation.confidenceScore}%`;
+        return `${statusIcon} ${legacyName} (edge: ${edgeInfo}, conf: ${confInfo})`;
+      });
+
+    if (approvedDetails.length > 0) {
+      console.log(`[POISSON-ENGINE] ${game.match ?? game.home}: ${approvedDetails.length} mercados → ${approvedDetails.join(' | ')}`);
+    }
+
+    return approvedMarkets;
+
+  } catch (error) {
+    console.error(`[POISSON-ENGINE] Erro ao avaliar jogo ${game.match ?? game.home}:`, error);
+    // Fallback para sistema antigo em caso de erro
+    return getEligibleMarketsLegacy(game);
+  }
+}
+
+// 🆕 Função legado original (mantida como fallback)
+function getEligibleMarketsLegacy(game: Record<string, any>): string[] {
   const markets = Object.entries(TRIGGER_MAP)
     .filter(([label, fn]) => !label.startsWith('__') && fn(game))
     .map(([label]) => label);
   
-  // 🆕 LOG TEMPORÁRIO PARA DEBUG
-  console.log(`[TRIGGER] ${game.match ?? game.home}: ${markets.join(' | ') || 'NENHUM'}`);
-  
   return markets;
+}
+
+// 🆕 Função principal com feature flag
+export function getEligibleMarkets(game: Record<string, any>): string[] {
+  if (USE_NEW_TRIGGER_ENGINE) {
+    return getEligibleMarketsNew(game);
+  } else {
+    return getEligibleMarketsLegacy(game);
+  }
+}
+
+// 🆕 Exportar função para ativar/desativar novo motor (para testes)
+export function setNewTriggerEngine(enabled: boolean): void {
+  // Em runtime, isso não funcionará mas serve para documentar
+  // Para produção, alterar a constante USE_NEW_TRIGGER_ENGINE
+  console.log(`[TRIGGER-ENGINE] Novo motor ${enabled ? 'ATIVADO' : 'DESATIVADO'} (requer restart)`);
 }
 
 // Verifica se um mercado específico é elegível

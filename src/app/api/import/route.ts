@@ -3,6 +3,8 @@ import { processNSGames, type BetResult } from '../../../lib/backtest';
 import { supabase, saveCsvDiario } from '../../../lib/supabase';
 import { generateDeterministicId } from '../../../lib/utils';
 import { validateBetResult } from '../../../lib/canonical';
+import { evaluateAllMarkets, TriggerEval } from '../../../lib/trigger-engine';
+import { gameToMatchInput } from '../../../lib/trigger-adapter';
 
 // Constante stake fixa R$25,00
 const STAKE_FIXA = 25.00;
@@ -164,15 +166,78 @@ export async function POST(request: NextRequest) {
         const csvDataDDMM = getImportDateDDMM(csvText);
         console.log(`[IMPORT-API] Salvando CSV bruto para data ${csvDataDDMM}`);
         const csvSaved = await saveCsvDiario(csvDataDDMM, csvText);
-        if (csvSaved) {
-          console.log(`[IMPORT-API] CSV bruto salvo com sucesso para ${csvDataDDMM}`);
-        } else {
-          console.warn(`[IMPORT-API] Falha ao salvar CSV bruto para ${csvDataDDMM}`);
-          errors.push('Falha ao salvar CSV bruto');
+      } catch (e: any) {
+        console.error('[IMPORT-API] Erro geral no Supabase:', e);
+        errors.push(`Erro no Supabase: ${e.message}`);
+      }
+
+      // 4. Salvar trigger suggestions no Supabase
+      console.log('[TRIGGER-SAVE] Iniciando salvamento das avaliações do motor Poisson...');
+      let triggerSavedCount = 0;
+      let triggerErrors = 0;
+
+      try {
+        // Processar jogos originais para extrair trigger evaluations
+        const { parseCSV } = await import('../../../engine');
+        const { games } = parseCSV(csvText);
+        
+        // Salvar apenas APPROVED no Supabase
+        for (const game of games) {
+          try {
+            const matchInput = gameToMatchInput(game);
+            const evals: TriggerEval[] = evaluateAllMarkets(matchInput);
+            
+            const approved = evals.filter(e => e.status === 'APPROVED');
+            
+            for (const eval_ of approved) {
+              const { error: triggerErr } = await supabase.from('trigger_suggestions').upsert({
+                fixture_id: (game as any).fixtureId ?? null,
+                match_label: game.match,
+                market_id: eval_.marketId,
+                data_mode: matchInput.dataMode ?? 'csv_only',
+                lambda_home: matchInput.lambdaHomeFT ?? null,
+                lambda_away: matchInput.lambdaAwayFT ?? null,
+                lambda_total: matchInput.exGTotal ?? null,
+                model_prob: eval_.modelProb,
+                implied_prob: eval_.impliedProb,
+                fair_odd: eval_.fairOdd,
+                captured_odd: null, // preencher quando apostar
+                edge_pct: eval_.edgePct,
+                confidence_score: eval_.confidenceScore,
+                status: eval_.status,
+                reason_codes: eval_.reasons,
+              }, { onConflict: 'fixture_id,market_id' });
+              
+              if (triggerErr) {
+                console.error(`[TRIGGER-SAVE] Erro ao salvar ${game.match} - ${eval_.marketId}:`, triggerErr.message);
+                triggerErrors++;
+              } else {
+                triggerSavedCount++;
+              }
+            }
+          } catch (gameErr: any) {
+            console.error(`[TRIGGER-SAVE] Erro ao processar jogo ${game.match}:`, gameErr.message);
+            triggerErrors++;
+          }
+        }
+        
+        console.log(`[TRIGGER-SAVE] Concluído: ${triggerSavedCount} avaliações salvas, ${triggerErrors} erros`);
+        
+      } catch (e: any) {
+        console.error('[TRIGGER-SAVE] Erro geral:', e);
+        errors.push(`Erro ao salvar trigger suggestions: ${e.message}`);
+      }
+
+      // 5. Salvar CSV diário (se houver jogos NS)
+      try {
+        const nsGames = processedResults.filter(r => r.status === 'NS');
+        if (nsGames.length > 0) {
+          await saveCsvDiario(csvText, getImportDateDDMM(csvText));
+          console.log(`[IMPORT-API] CSV diário salvo com ${nsGames.length} jogos NS`);
         }
       } catch (e: any) {
         console.error('[IMPORT-API] Erro ao salvar CSV diário:', e);
-        errors.push('Erro ao salvar CSV diário: ' + (e?.message ?? 'Erro desconhecido'));
+        errors.push(`Erro ao salvar CSV diário: ${e.message}`);
       }
 
     } catch (e: any) {

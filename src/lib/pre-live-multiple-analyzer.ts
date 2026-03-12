@@ -12,6 +12,10 @@ import { OddsResolution } from '../types/odds';
 type AnalyzerMode = 'full' | 'panorama';
 import { getEligibleMarkets, isMarketEligible } from './trigger-map';
 
+// 🆕 Importar novo motor Poisson
+import { evaluateAllMarkets, TriggerEval } from './trigger-engine';
+import { gameToMatchInput } from './trigger-adapter';
+
 // ── FUNÇÕES POISSON ─────────────────────────────────────────────────────────────
 // Memoizar factorial para não recalcular
 const factCache: Record<number, number> = { 0: 1, 1: 1 };
@@ -896,6 +900,60 @@ export class PreLiveMultipleAnalyzer {
     return selected;
   }
 
+  // 🆕 Função para obter main market baseado nas avaliações do trigger engine
+  private getMainMarketFromEvals(game: any) {
+    // 1. Pega APPROVED de maior edge
+    const approved = (game.approvedMarkets ?? [])
+      .sort((a: TriggerEval, b: TriggerEval) => (b.edgePct ?? 0) - (a.edgePct ?? 0));
+
+    if (approved.length > 0) {
+      const top = approved[0];
+      return {
+        label: this.marketLabel(top.marketId),
+        odd: top.fairOdd ?? (game as any).odds?.[top.marketId] ?? null,
+        modelProb: top.modelProb,
+        edgePct: top.edgePct,
+        status: top.status,
+        reasons: top.reasons,
+        source: 'trigger-engine',
+      };
+    }
+
+    // 2. Fallback: REVIEW de maior edge
+    const review = (game.reviewMarkets ?? [])
+      .sort((a: TriggerEval, b: TriggerEval) => (b.edgePct ?? 0) - (a.edgePct ?? 0));
+
+    if (review.length > 0) {
+      const top = review[0];
+      return {
+        label: this.marketLabel(top.marketId),
+        odd: null,
+        modelProb: top.modelProb,
+        edgePct: top.edgePct,
+        status: 'REVIEW',
+        source: 'trigger-engine-review',
+      };
+    }
+
+    // 3. Último fallback: Over 0.5 HT legacy
+    return {
+      label: 'Over 0.5 Gols HT',
+      odd: (game as any).odds?.over05HT ?? null,
+      status: 'FALLBACK',
+      source: 'legacy',
+    };
+  }
+
+  private marketLabel(marketId: string): string {
+    const map: Record<string, string> = {
+      OVER_05_HT: 'Over 0.5 Gols HT',
+      OVER_15_FT: 'Over 1.5 FT',
+      OVER_25_FT: 'Over 2.5 FT',
+      BTTS_YES:   'Ambas Marcam — Sim',
+    };
+    return map[marketId] ?? marketId;
+  }
+
   // 🆕 Método leve para popular linhas do Panorama (SEM Poisson pesado)
   private async populatePanoramaLines(game: any) {
     // 1. MAIN-MARKET (lógica existente do PANORAMA-MAIN)
@@ -920,36 +978,8 @@ export class PreLiveMultipleAnalyzer {
       `[PANORAMA-MAIN] ${game.match}: fav=${favName} isFavHome=${isFavHome} hitRate=${(hitRate*100).toFixed(0)}% chHTFav=${chHTFav} cantHT=${cantHT} xg=${xg.toFixed(2)} hasFinHT=${!!finHTMarket}`,
     );
 
-    // lógica de prioridade
-    if (hitRate >= 0.70) {
-      game.mainMarket = {
-        label: 'Over 0.5 Gols HT',
-        odd: 1.75,
-        minOdd: 1.45,
-        source: 'histórico',
-      };
-    } else if (finHTMarket) {
-      game.mainMarket = {
-        label: finHTMarket.label,
-        odd: finHTMarket.odd,
-        minOdd: finHTMarket.minOdd,
-        source: finHTMarket.source,
-      };
-    } else if (xg >= 2.0) {
-      game.mainMarket = {
-        label: 'Over 1.5 FT',
-        odd: 1.75,
-        minOdd: 1.50,
-        source: `xG ${xg.toFixed(2)}`,
-      };
-    } else {
-      game.mainMarket = {
-        label: 'Over 1.5 FT',
-        odd: 1.75,
-        minOdd: 1.50,
-        source: 'engine',
-      };
-    }
+    // 🆕 Usar nova lógica baseada nas avaliações do trigger engine
+    game.mainMarket = this.getMainMarketFromEvals(game);
 
     // 2. COMBO simples (sem Poisson pesado)
     game.combo = await this.getSimpleComboLines(game);
@@ -1131,6 +1161,40 @@ export class PreLiveMultipleAnalyzer {
       // 🆕 Injeta odds reais se fornecidas
       if (oddsMap && fixtureMap) {
         this.injectRealOdds(oddsMap, fixtureMap);
+      }
+      
+      // 🆕 Avaliar mercados com novo motor Poisson (após ODDS-INJECT)
+      console.log(`[TRIGGER-EVAL] Iniciando avaliação de ${qualityGames.length} jogos com motor Poisson...`);
+      
+      // 🆕 Log temporário para debug de odds
+      console.log('[ODDS-DEBUG] Amostra de odds dos jogos:');
+      for (let i = 0; i < Math.min(3, qualityGames.length); i++) {
+        const game = qualityGames[i];
+        console.log('[ODDS-DEBUG]', game.match, {
+          oddsMap:    JSON.stringify(game.odds ?? {}),
+          rawOdds:    JSON.stringify(game.rawOdds ?? {}),
+          col9:       game.col9,   // Over 2.5 FT
+          col12:      game.col12,  // BTTS
+          col13:      game.col13,  // Over 0.5 HT
+          percMais25: game.percMais25Gols, // % histórico Over 2.5
+        });
+      }
+      
+      for (const game of qualityGames) {
+        const matchInput = gameToMatchInput(game);
+        const evals: TriggerEval[] = evaluateAllMarkets(matchInput);
+
+        // Adicionar propriedades ao objeto game
+        (game as any).triggerEvals = evals;
+        (game as any).approvedMarkets = evals.filter(e => e.status === 'APPROVED');
+        (game as any).reviewMarkets = evals.filter(e => e.status === 'REVIEW');
+
+        // Log compacto (modo panorama)
+        const approved = (game as any).approvedMarkets.map((e: TriggerEval) =>
+          `${e.marketId} prob=${(e.modelProb! * 100).toFixed(1)}% edge=+${e.edgePct?.toFixed(1)}%` 
+        ).join(' | ');
+
+        console.log(`[TRIGGER-EVAL] ${game.match}: ${approved || 'nenhum APPROVED'}`);
       }
       
       // ✅ NOVO: Popular BÁSICO para Panorama (SEM múltiplas)

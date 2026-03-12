@@ -1559,3 +1559,120 @@ body {
   border: 1px solid #ff9100;
   font-weight: 800;
 }
+
+/* ─────────────────────────────────────────
+   LAYOUT ÁRVORE - PANORAMA
+───────────────────────────────────────── */
+.game-tree-card {
+  border: 1px solid #30363d;
+  transition: all 0.2s;
+}
+
+.game-tree-card:hover {
+  border-color: #58a6ff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(88, 166, 255, 0.1);
+}
+
+.principal-market {
+  font-family: monospace;
+}
+
+.tree-line {
+  border-left: 2px solid #30363d;
+  font-family: 'Courier New', monospace;
+}
+
+/* Tier colors */
+.game-tree-card.elite { 
+  border-color: #f0c040 !important; 
+  box-shadow: 0 0 0 1px rgba(240, 192, 64, 0.2);
+}
+
+.game-tree-card.forte { 
+  border-color: #3fb950 !important;
+  box-shadow: 0 0 0 1px rgba(63, 185, 80, 0.2);
+}
+
+.game-tree-card.moderado { 
+  border-color: #58a6ff !important;
+  box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.2);
+}
+
+.game-tree-card.fraco { 
+  border-color: #f85149 !important;
+  box-shadow: 0 0 0 1px rgba(248, 81, 73, 0.2);
+}
+
+/* ─────────────────────────────────────────
+   RESPONSIVO - MOBILE
+───────────────────────────────────────── */
+@media (max-width: 768px) {
+  .tree-header { 
+    flex-direction: column; 
+    gap: 4px; 
+    align-items: flex-start;
+  }
+  
+  .principal-market { 
+    font-size: 12px; 
+    padding: 6px 10px;
+  }
+  
+  .tree-line { 
+    font-size: 11px; 
+    padding-left: 12px;
+  }
+  
+  .game-tree-card {
+    padding: 12px;
+    margin-bottom: 8px;
+  }
+  
+  .games-grid {
+    grid-template-columns: 1fr !important;
+    gap: 8px;
+  }
+  
+  .panorama-header {
+    padding: 8px 12px;
+  }
+  
+  .stats {
+    font-size: 12px !important;
+  }
+  
+  .stats-bar {
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px !important;
+  }
+  
+  .filters {
+    flex-direction: column;
+    gap: 6px;
+  }
+  
+  .filters select {
+    width: 100%;
+  }
+}
+
+/* ─────────────────────────────────────────
+   EV BADGES
+───────────────────────────────────────── */
+.ev-badge {
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-weight: 600;
+  font-size: 10px;
+  color: white;
+}
+
+.ev-badge.ev-alto { 
+  background: #3fb950; /* >20% */
+}
+
+.ev-badge.ev-bom { 
+  background: #58a6ff; /* 5-20% */
+}
