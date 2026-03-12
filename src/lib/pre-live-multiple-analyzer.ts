@@ -896,8 +896,123 @@ export class PreLiveMultipleAnalyzer {
     return selected;
   }
 
+  // 🆕 Método leve para popular linhas do Panorama (SEM Poisson pesado)
+  private async populatePanoramaLines(game: any) {
+    // 1. MAIN-MARKET (lógica existente do PANORAMA-MAIN)
+    const fav = getFavorito(game);
+    const isFavHome = (fav.nome ?? game.home) === game.home;
+    const favName = fav.nome ?? game.home;
+
+    const chHTFav = Number(isFavHome ? game.chHTH : game.chHTA) ?? 0;
+    const cantHT = Number(isFavHome ? game.cantHTH : game.cantHTA) ?? 0;
+    const xg = Number(game.exG ?? game.exGraw ?? 0);
+
+    // hitRate
+    const baseHitRate05HT = MARKET_WIN_RATES['Over 0.5 Gols HT'].wins / MARKET_WIN_RATES['Over 0.5 Gols HT'].total;
+    const rawHitRateCSV = Number(isFavHome ? game.gol05HTH : game.gol05HTA) ?? 0;
+    const csvHitRate = rawHitRateCSV > 1 ? rawHitRateCSV / 100 : rawHitRateCSV;
+    const hitRate = (csvHitRate >= 0.50 && csvHitRate <= 0.90) ? csvHitRate : baseHitRate05HT;
+
+    // tentar main de Finalizações HT com linha da casa
+    const finHTMarket = this.buildFinalizacoesHTMarket(game);
+
+    console.log(
+      `[PANORAMA-MAIN] ${game.match}: fav=${favName} isFavHome=${isFavHome} hitRate=${(hitRate*100).toFixed(0)}% chHTFav=${chHTFav} cantHT=${cantHT} xg=${xg.toFixed(2)} hasFinHT=${!!finHTMarket}`,
+    );
+
+    // lógica de prioridade
+    if (hitRate >= 0.70) {
+      game.mainMarket = {
+        label: 'Over 0.5 Gols HT',
+        odd: 1.75,
+        minOdd: 1.45,
+        source: 'histórico',
+      };
+    } else if (finHTMarket) {
+      game.mainMarket = {
+        label: finHTMarket.label,
+        odd: finHTMarket.odd,
+        minOdd: finHTMarket.minOdd,
+        source: finHTMarket.source,
+      };
+    } else if (xg >= 2.0) {
+      game.mainMarket = {
+        label: 'Over 1.5 FT',
+        odd: 1.75,
+        minOdd: 1.50,
+        source: `xG ${xg.toFixed(2)}`,
+      };
+    } else {
+      game.mainMarket = {
+        label: 'Over 1.5 FT',
+        odd: 1.75,
+        minOdd: 1.50,
+        source: 'engine',
+      };
+    }
+
+    // 2. COMBO simples (sem Poisson pesado)
+    game.combo = await this.getSimpleComboLines(game);
+
+    // 3. PATTERN-LINES essenciais (só Fin/Cantos básicos)
+    game.patternLines = await this.getEssentialPatternLines(game);
+  }
+
+  // 🆕 Combo leve para Panorama (SEM generateQualityMultiples)
+  private async getSimpleComboLines(game: any): Promise<any[]> {
+    const combo: any[] = [];
+    const fav = getFavorito(game);
+    const isFavHome = (fav.nome ?? game.home) === game.home;
+
+    const cantHT = Number(isFavHome ? game.cantHTH : game.cantHTA) ?? 0;
+    const chHTFav = Number(isFavHome ? game.chHTH : game.chHTA) ?? 0;
+
+    // Cantos HT básico
+    if (cantHT >= 3.0) {
+      combo.push({
+        label: 'Over 3.5 Cantos HT',
+        odd: 1.85,
+        minOdd: 1.65,
+        hitRate: 0.64,
+        source: 'histórico',
+      });
+    }
+
+    // Finalizações HT (se não for mainMarket)
+    const finHTMarket = this.buildFinalizacoesHTMarket(game);
+    if (finHTMarket && game.mainMarket?.label !== finHTMarket.label) {
+      combo.push(finHTMarket);
+    }
+
+    return combo;
+  }
+
+  // 🆕 PatternLines essenciais (SEM Poisson complexo)
+  private async getEssentialPatternLines(game: any): Promise<any[]> {
+    const patterns: any[] = [];
+    
+    // Apenas cantos FT básicos se exC >= 10 (SEM cálculo Poisson)
+    if ((game.exC ?? 0) >= 10) {
+      const lambdaCantos = (game.cantFTH ?? 0) + (game.cantFTA ?? 0);
+      
+      if (lambdaCantos >= 8) {
+        // Linha fixa simples (SEM Poisson)
+        const linhaSugerida = lambdaCantos >= 11 ? 9.5 : 8.5;
+        
+        patterns.push({
+          label: `Over ${linhaSugerida} Cantos FT`,
+          odd: 1.75,
+          hitRate: 0.65, // fixo simples
+          source: 'estimated',
+        });
+      }
+    }
+
+    return patterns;
+  }
+
   // Analisa CSV do dia para gerar múltiplas pré-live
-  async analyzeLiveMultiples(csvText: string, oddsMap?: Record<number, PreMatchOdds>, fixtureMap?: Record<string, number>, ignoredMatches: string[] = [], selectedDate?: string): Promise<{
+  async analyzeLiveMultiples(csvText: string, oddsMap?: Record<number, PreMatchOdds>, fixtureMap?: Record<string, number>, ignoredMatches: string[] = [], selectedDate?: string, mode: AnalyzerMode = 'full'): Promise<{
     suggestions: LiveMultipleSuggestion[];
     summary: {
       totalGames: number;
@@ -1018,6 +1133,24 @@ export class PreLiveMultipleAnalyzer {
         this.injectRealOdds(oddsMap, fixtureMap);
       }
       
+      // ✅ NOVO: Popular BÁSICO para Panorama (SEM múltiplas)
+      if (mode === 'panorama') {
+        for (const game of qualityGames) {
+          await this.populatePanoramaLines(game); // mainMarket + combo simples + patternLines essenciais
+        }
+        return {
+          games: qualityGames,
+          suggestions: [],
+          summary: { 
+            totalGames: qualityGames.length,
+            qualityGames: qualityGames.length,
+            confluencePairs: 0,
+            avgConfidence: qualityGames.reduce((acc, g: any) => acc + (g.confidence || 0), 0) / qualityGames.length || 0
+          },
+        };
+      }
+      
+      // ❌ AGORA sim: full pipeline (só modo 'full')
       // Gera múltiplas baseadas em confluência de perfis
       const suggestions = await this.generateQualityMultiples(qualityGames);
       console.log(` ${suggestions.length} múltiplas geradas por confluência`);
@@ -2668,7 +2801,8 @@ export async function analyzeLiveMultiplesAsync(
     oddsMap, 
     fixtureMap, 
     ignoredMatches, 
-    selectedDate
+    selectedDate,
+    mode // 🆕 passar mode para o método interno
   );
 
   if (mode === 'panorama') {
