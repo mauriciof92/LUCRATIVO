@@ -79,6 +79,14 @@ function GameCard({ game }: { game: any }) {
     }} />
   )
 
+  // 🆕 Helper para formatação de odds com regras estritas
+  const formatOdd = (odd: number, source: string | null) => {
+    if (!source || source === 'estimated' || source === 'fallback') {
+      return '— (verificar na casa)';
+    }
+    return `@ ${Number(odd).toFixed(2)}`;
+  };
+
   return (
     <div style={{
       background: '#161b22',
@@ -144,11 +152,11 @@ function GameCard({ game }: { game: any }) {
             {(bestProb.prob * 100).toFixed(0)}% histórico
             {bestProb.source === 'api-real' ? (
               <span style={{ color: '#3fb950', marginLeft: 8 }}>
-                odd: {bestProb.odd.toFixed(2)} ✅ EV +{((bestProb.prob * bestProb.odd) - 1).toFixed(0)}%
+                {formatOdd(bestProb.odd, bestProb.source)} ✅ EV +{((bestProb.prob * bestProb.odd) - 1).toFixed(0)}%
               </span>
             ) : (
               <span style={{ color: '#8b949e', marginLeft: 8 }}>
-                odd: — (verificar na casa)
+                {formatOdd(bestProb.odd, bestProb.source)}
               </span>
             )}
           </div>
@@ -180,13 +188,52 @@ function GameCard({ game }: { game: any }) {
               <div style={{ fontSize: 11, color: '#8b949e', textAlign: 'right' }}>
                 {line.source === 'api-real' ? (
                   <>
-                    <div>odd: {line.odd.toFixed(2)}</div>
+                    <div>{formatOdd(line.odd, line.source)}</div>
                     <div style={{ color: '#3fb950' }}>
                       ✅ EV +{((line.prob * line.odd) - 1).toFixed(0)}%
                     </div>
                   </>
                 ) : (
-                  <div>—</div>
+                  <div>{formatOdd(line.odd, line.source)}</div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── PADRÕES ESTRATÉGICOS ─── */}
+      {game.patternLines?.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 10, color: '#f0c040', marginBottom: 4,
+            textTransform: 'uppercase', letterSpacing: 1 }}>
+            🎯 Padrões Estratégicos
+          </div>
+          {game.patternLines
+            .sort((a: any, b: any) => b.prob - a.prob) // Ordenar por prob decrescente
+            .map((line: any, i: number) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center',
+              gap: 8, padding: '7px 10px', background: '#1c2128',
+              borderRadius: 6, border: '1px solid #f0c040', marginBottom: 4 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, color: '#e6edf3', marginBottom: 2 }}>
+                  {line.label}
+                </div>
+                <ProbBar prob={line.hitRate ?? line.prob} />
+                <div style={{ fontSize: 10, color: '#8b949e', marginTop: 2 }}>
+                  {((line.hitRate ?? line.prob) * 100).toFixed(0)}% histórico
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: '#8b949e', textAlign: 'right' }}>
+                {line.source === 'api-real' ? (
+                  <>
+                    <div>{formatOdd(line.odd, line.source)}</div>
+                    <div style={{ color: '#3fb950' }}>
+                      ✅ EV +{(((line.hitRate ?? line.prob) * line.odd) - 1).toFixed(0)}%
+                    </div>
+                  </>
+                ) : (
+                  <div>{formatOdd(line.odd, line.source)}</div>
                 )}
               </div>
             </div>
@@ -255,7 +302,8 @@ export default function PanoramaPage() {
           oddsMap, 
           fixtureMap, 
           [], 
-          selectedDDMM
+          selectedDDMM,
+          'panorama'
         );
         
         setNsGames(analysis.games ?? []); // ← guardar jogos completos do analyzer
@@ -265,7 +313,7 @@ export default function PanoramaPage() {
         // Fallback: processar sem odds reais
         try {
           console.log('[PANORAMA] Fallback: processando sem odds reais...');
-          const analysis = await analyzeLiveMultiplesAsync(lastCsvText, undefined, undefined, [], selectedDDMM);
+          const analysis = await analyzeLiveMultiplesAsync(lastCsvText, undefined, undefined, [], selectedDDMM, 'panorama');
           setNsGames(analysis.games ?? []);
           console.log(`[PANORAMA] ${analysis.games?.length || 0} jogos NS processados (fallback sem odds)`);
         } catch (fallbackError) {

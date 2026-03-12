@@ -8,6 +8,8 @@ import {
 
 import { parseCSV, getOddForLabel, classifyProfile, getFavorito, computeConfidence, computeScore, calculateValueBet, getMinOddForLabel, suggestMainMarket, suggestCombo, detectPoisonTriggers, suggestBetBuilder, extractDateFromHour } from "../engine";
 import { OddsResolution } from '../types/odds';
+
+type AnalyzerMode = 'full' | 'panorama';
 import { getEligibleMarkets, isMarketEligible } from './trigger-map';
 
 // ── FUNÇÕES POISSON ─────────────────────────────────────────────────────────────
@@ -285,12 +287,27 @@ export class PreLiveMultipleAnalyzer {
         candidates.push(`Over ${adj} Finalizações FT`);
       }
 
+      // 🔁 ajustar loop para priorizar SEMPRE a linha da casa
       for (const k of candidates) {
-        if (realMarkets[k] && realMarkets[k] >= 1.35) {
-          const linha = parseFloat(k.match(/Over\s+([\d.]+)/)?.[1] || linhaPoisson.toString());
-          console.log(`[FTBOX-REAL] ${teamName} chutes: linha=${linhaPoisson} → chave="${k}" @ ${realMarkets[k]} (API)`);
-          return { odd: realMarkets[k], linha };
-        }
+        const rawOdd = realMarkets[k];
+        if (!rawOdd || rawOdd <= 1.35) continue;
+
+        // tentar extrair a linha da própria chave "Over X.Y"
+        const matchLine = k.match(/Over\s+([0-9.]+)/i);
+        const linhaCasa = matchLine ? parseFloat(matchLine[1]) : NaN;
+
+        // fallback: se não conseguir parsear, usa linhaPoisson apenas para não quebrar
+        const linhaFinal = !isNaN(linhaCasa) ? linhaCasa : linhaPoisson;
+
+        console.log(
+          `FTBOX-REAL ${teamName} chutes linhaCasa=${isNaN(linhaCasa) ? 'NA' : linhaCasa
+          } linhaPoisson=${linhaPoisson} chave=${k} odd=${rawOdd} API`,
+        );
+
+        return {
+          odd: rawOdd,
+          linha: linhaFinal,
+        };
       }
       
       return null;
@@ -495,7 +512,7 @@ export class PreLiveMultipleAnalyzer {
       if (!opt || !opt.label) continue;
       if (!this.isLabelAllowed(opt.label, game.league || '')) continue;
       const oddResolution = this.resolveOdd(game, opt.label);
-      const bestOdd = oddResolution.marketOdd ?? 0; // 🆕 Reforma Odds
+      const bestOdd = oddResolution.marketOdd ?? null; // 🆕 Reforma Odds
       if (!this.isOddInRange(bestOdd)) continue;
       const signature = `${game.home}_${opt.label}`;
       if (!usedSignatures.has(signature)) {
@@ -731,25 +748,108 @@ export class PreLiveMultipleAnalyzer {
       );
     }
     
+    // Helper para montar mercado de Finalizações HT usando linha da casa
+    const finalizacoesHTMarket = this.buildFinalizacoesHTMarket(game);
+    if (finalizacoesHTMarket) {
+      ftMarkets.push(finalizacoesHTMarket);
+    }
+    
     return ftMarkets;
   }
-  // � Extrai MÚLTIPLOS mercados complementares de eixos diferentes para um jogo (Bet Builder)
+
+  // Helper para montar mercado de Finalizações HT usando linha da casa
+  private buildFinalizacoesHTMarket(game: any): any | null {
+    const fav = getFavorito(game);
+    if (!fav?.nome) return null;
+
+    const matchKey = `${game.home} x ${game.away}`;
+
+    // chHTFav vem do CSV: chutes do favorito no HT
+    const chHTFav = Number((game as any).chHTH ?? (game as any).chHTA ?? 0);
+
+    // sem volume, não faz sentido sugerir
+    if (!chHTFav || chHTFav < 3) return null;
+
+    // linha alvo básica pela sua regra atual (pode ajustar conforme já existente no código)
+    const linhaAlvo =
+      chHTFav >= 7 ? 5.5 :
+      chHTFav >= 5 ? 3.5 :
+      null;
+
+    if (linhaAlvo === null) return null;
+
+    // tentar resolver odds reais de "chutes" (Finalizações HT) usando linhaAlvo como guia
+    const oddResult = this.resolveRealOdd(matchKey, fav.nome, 'chutes', linhaAlvo, game);
+
+    // se a API tem mercados de chutes mas oddResult veio null, significa odd ruim → descartar
+    const hasRealOdds = !!this.realOddsMap?.[matchKey];
+    const chuteApiHasKey =
+      hasRealOdds &&
+      Object.keys(this.realOddsMap[matchKey]).some(
+        (k) =>
+          k.toLowerCase().includes('finaliz') ||
+          k.toLowerCase().includes('shot') ||
+          k.toLowerCase().includes('chute'),
+      );
+
+    if (chuteApiHasKey && !oddResult) {
+      console.log(
+        `[FIN-HT] ${matchKey} Finalizações HT descartado — API tem chutes mas odd ruim (linha alvo=${linhaAlvo})`,
+      );
+      return null;
+    }
+
+    // linha e odd finais
+    const linhaFinal = oddResult?.linha ?? linhaAlvo;
+    const oddFinal = oddResult?.odd ?? 1.70;
+    const source = oddResult ? 'api-real' : 'estimated';
+
+    // normalizar label para cruzar com histórico
+    const label = `${fav.nome} Over ${linhaFinal} Finalizações HT`;
+    const normalized = normalizeMarketLabel(label);
+    const stats = MARKET_WIN_RATES[normalized as keyof typeof MARKET_WIN_RATES];
+    const hitRate = stats ? stats.wins / stats.total : null;
+
+    console.log(
+      `[FIN-HT] ${matchKey} label="${label}" odd=${oddFinal} source=${source} hitRate=${hitRate ?? 'NA'}`,
+    );
+
+    return {
+      label,
+      odd: oddFinal,
+      minOdd: getMinOddForLabel(label) ?? 1.60,
+      hitRate,
+      source,
+    };
+  }
+
+  // Extrai MÚLTIPLOS mercados complementares de eixos diferentes para um jogo (Bet Builder)
   // ticketAxes: eixos já usados por outros jogos no bilhete — penaliza repetição
   private getGameMarkets(game: any, usedSigs: Set<string>, maxMarkets: number, ticketAxes?: Set<string>, isSinfonia: boolean = false): any[] {
     const combo = isSinfonia ? (suggestBetBuilder(game) || []) : (suggestCombo(game) || []);
     const main = suggestMainMarket(game);
     
-    // 🆕 Adicionar mercados FT seguros
+    // 🆕 tentar adicionar Finalizações HT com linha da casa
+    const finHTMarket = this.buildFinalizacoesHTMarket(game);
+    if (finHTMarket) {
+      // evitar duplicar se engine já sugeriu algo textual idêntico
+      const alreadyInCombo = (combo || []).some((c: any) => c.label === finHTMarket.label);
+      if (!alreadyInCombo) {
+        (combo || []).push(finHTMarket);
+      }
+    }
+    
+    // Adicionar mercados FT seguros
     const ftMarkets = this.generateFTSafeMarkets(game);
     
     const allCandidates: any[] = [];
     
     if (isSinfonia) {
-      allCandidates.push(...combo);
+      allCandidates.push(...(combo || []));
     } else {
       // Para as múltiplas normais, preferimos o Main Market, mas se o combo tiver algo melhor, tentamos usar
       if (main?.label) allCandidates.push(main);
-      allCandidates.push(...combo);
+      allCandidates.push(...(combo || []));
     }
 
     // 🆕 Adicionar FT markets ao final (prioridade menor)
@@ -780,7 +880,7 @@ export class PreLiveMultipleAnalyzer {
       if (!isSinfonia && ticketAxes && ticketAxes.has(broad)) continue;
 
       const oddResolution = this.resolveOdd(game, opt.label); // 🆕 Reforma Odds
-      let bestOdd = oddResolution.marketOdd ?? 0;
+      let bestOdd = oddResolution.marketOdd ?? null;
 
       // A verificação agora é hiper-flexível (1.01 a 20.00), priorizando a estatística
       if (!this.isOddInRange(bestOdd)) continue;
@@ -996,44 +1096,76 @@ export class PreLiveMultipleAnalyzer {
           // Continuar com o processamento normal em vez de return
         }
 
-        // Hierarquia: Over 0.5 HT > Ambas Marcam > Over 1.5 FT > Over 2.5 FT > Under 2.5 FT
-        const hierarchy = [
-          'Over 0.5 Gols HT',
-          'Ambas Marcam Sim',
-          'Over 1.5 FT',
-          'Over 2.5 FT',
-          'Under 2.5 FT',
-        ];
+        // 🆕 PANORAMA-MAIN — seleção baseada em edge real
+        // tentar main de Finalizações HT com linha da casa
+        const finHTMarket = this.buildFinalizacoesHTMarket(game);
+        
+        console.log(
+          `[PANORAMA-MAIN] ${(game as any).match}: fav=${favName} isFavHome=${isFavHome} hitRate=${(hitRate*100).toFixed(0)}% chHTFav=${chHTFav} cantHT=${cantHT} xg=${xg.toFixed(2)} hasFinHT=${!!finHTMarket}`,
+        );
 
-        const chosen = hierarchy.find(m => eligible.includes(m));
+        // lógica de prioridade (exemplo conservador):
+        // 1) Over 0.5 Gols HT se houver hitRate forte
+        // 2) Finalizações HT com linha da casa se existir e tiver hitRate/histórico
+        // 3) Over 1.5 FT por xG
+        // 4) Fallback Over 1.5 FT engine
 
-        if (chosen) {
+        if (hitRate >= 0.70) {
           (game as any).mainMarket = {
-            label: chosen,
-            odd: realMarkets[chosen] ?? (game as any)[`odd${chosen.replace(/\s/g,'')}`] ?? 1.75,
-            hitRate: MARKET_WIN_RATES[chosen]
-              ? MARKET_WIN_RATES[chosen].wins / MARKET_WIN_RATES[chosen].total
-              : 0.65,
-            source: `gatilho: ${chosen}`,
+            label: 'Over 0.5 Gols HT',
+            odd: realMarkets['Over 0.5 Gols HT'] ?? 1.75,
+            minOdd: 1.45,
+            source: 'histórico',
+          };
+        } else if (finHTMarket) {
+          (game as any).mainMarket = {
+            label: finHTMarket.label,
+            odd: finHTMarket.odd,
+            minOdd: finHTMarket.minOdd,
+            source: finHTMarket.source, // api-real ou estimated
+          };
+        } else if (xg >= 2.0) {
+          (game as any).mainMarket = {
+            label: 'Over 1.5 FT',
+            odd: realMarkets['Over 1.5 FT'] ?? 1.75,
+            minOdd: 1.50,
+            source: `xG ${xg.toFixed(2)}`,
+          };
+        } else {
+          (game as any).mainMarket = {
+            label: 'Over 1.5 FT',
+            odd: realMarkets['Over 1.5 FT'] ?? 1.75,
+            minOdd: 1.50,
+            source: 'engine',
           };
         }
 
-        // Combo: pegar elegíveis restantes (exceto o principal), até 2
-        (game as any).combo = hierarchy
-          .filter(m => eligible.includes(m) && m !== chosen)
-          .slice(0, 2)
-          .map(m => ({
-            label: m,
-            odd: realMarkets[m] ?? 1.75,
-            hitRate: MARKET_WIN_RATES[m]
-              ? MARKET_WIN_RATES[m].wins / MARKET_WIN_RATES[m].total
-              : 0.65,
-          }));
+        // reconstruir combo como antes, mas sem duplicar a linha de Finalizações HT
+        (game as any).combo = [];
 
+        if (cantHT >= 3.0) {
+          (game as any).combo.push({
+            label: 'Over 3.5 Cantos HT',
+            odd: 1.85,
+            minOdd: 1.65,
+            hitRate: 0.64,
+            source: 'histórico',
+          });
+        }
+
+        // só adicionar finHT no combo se não virou mainMarket
+        if (finHTMarket && (game as any).mainMarket.label !== finHTMarket.label) {
+          (game as any).combo.push(finHTMarket);
+        }
+
+        const hr = (game as any).mainMarket?.hitRate ?? (game as any).mainMarket?.prob ?? null;
+        const hrPct = hr !== null
+          ? `${Math.round(Number(hr) <= 1 ? Number(hr) * 100 : Number(hr))}%` 
+          : 'sem histórico';
         console.log(`[MAIN-SELECTED] ${(game as any).match}: ` 
   + `${(game as any).mainMarket?.label} ` 
   + `@ ${(game as any).mainMarket?.odd} ` 
-  + `(${((game as any).mainMarket?.hitRate * 100).toFixed(0)}% histórico)` 
+  + `(${hrPct} histórico)` 
 );
       }
 
@@ -2521,13 +2653,29 @@ export async function analyzePreLiveMultiples(csvText: string): Promise<{
   return analyzer.analyzeLiveMultiples(csvText);
 }
 
-// 🆕 Export async version for real odds integration
-export async function analyzeLiveMultiplesAsync(csvText: string, oddsMap?: Record<number, PreMatchOdds>, fixtureMap?: Record<string, number>, ignoredMatches: string[] = [], selectedDate?: string): Promise<{
-  suggestions: LiveMultipleSuggestion[];
-  summary: any;
-  ftBoxCandidates?: any[];
-  games?: any[]; // 🆕 Adicionar jogos com patternLines
-}> {
-  const analyzer = new PreLiveMultipleAnalyzer();
-  return analyzer.analyzeLiveMultiples(csvText, oddsMap, fixtureMap, ignoredMatches, selectedDate);
+export async function analyzeLiveMultiplesAsync(
+  csvText: string,
+  oddsMap?: Record<number, PreMatchOdds>,
+  fixtureMap?: Record<string, number>,
+  ignoredMatches: string[] = [],
+  selectedDate?: string,
+  mode: AnalyzerMode = 'full',
+): Promise<any> {
+  const analyzer = PreLiveMultipleAnalyzer.getInstance();
+  
+  const result = await analyzer.analyzeLiveMultiples(
+    csvText, 
+    oddsMap, 
+    fixtureMap, 
+    ignoredMatches, 
+    selectedDate
+  );
+
+  if (mode === 'panorama') {
+    // Panorama só quer jogos processados com mainMarket/combo/patternLines
+    return { games: result.games ?? [] };
+  }
+
+  // Múltiplas usa o full output atual (sem mudança)
+  return result;
 }
