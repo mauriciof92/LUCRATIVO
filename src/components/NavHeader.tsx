@@ -9,11 +9,12 @@ const C = {
 };
 
 const NAV_LINKS = [
-  { label: '� Panorama',  href: '/panorama' },
+  { label: '🔮 Panorama',  href: '/panorama' },
   { label: '📋 Histórico', href: '/backtest' },
   { label: '📊 Dashboard', href: '/dashboard' },
   { label: '🎫 Bilhetes',  href: '/multiple-analyzer' },
   { label: '⛏️ Minerador',  href: '/patterns' },
+  { label: '🧪 Lab. Múltiplas', href: '/admin/multiples-lab' },
   { label: '⚙️ Admin',     href: '/admin' },
 ];
 
