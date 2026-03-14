@@ -280,6 +280,14 @@ export default function AdminPage() {
   const [databaseError, setDatabaseError] = useState<string>("");
   const [successMessage, setSuccessMessage] = useState<string>("");
 
+  // 🆕 Estados para UPSERT
+  const [upserting, setUpserting] = useState(false);
+  const [csvContent, setCsvContent] = useState<string>("");
+  const [selectedDate, setSelectedDate] = useState<string>(() => {
+    const today = new Date();
+    return today.toISOString().split('T')[0]; // YYYY-MM-DD
+  });
+
   // 🆕 Detectar se está no cliente
   useEffect(() => {
     setIsClient(true);
@@ -289,14 +297,50 @@ export default function AdminPage() {
   const handleCsvSelect = (file: File) => {
     setCsvFile(file);
     setProcessResult(null);
-    // Ler primeira linha para preview
+    // Ler conteúdo completo para UPSERT
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = e.target?.result as string;
       const lines = text.split('\n').filter(Boolean);
       setCsvPreview(`${lines.length - 1} jogos encontrados`);
+      setCsvContent(text); // 🆕 Armazenar conteúdo para UPSERT
     };
     reader.readAsText(file);
+  };
+
+  // 🆕 Handler para UPSERT na tabela única
+  const handleUpsert = async () => {
+    if (!csvContent.trim()) {
+      setDatabaseError("Nenhum conteúdo CSV para upsert");
+      return;
+    }
+
+    setUpserting(true);
+    setDatabaseError("");
+    setSuccessMessage("");
+
+    try {
+      const res = await fetch('/api/upsert-games', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csvText: csvContent, date: selectedDate })
+      });
+
+      const result = await res.json();
+      
+      if (result.success) {
+        setSuccessMessage(`${result.total} jogos upsertados! (${result.inserted} novos, ${result.updated} atualizados)`);
+        // Recarregar Panorama para mostrar os dados frescos
+        router.refresh();
+      } else {
+        throw new Error(result.error || 'Erro desconhecido');
+      }
+    } catch (err: any) {
+      console.error('UPSERT ERROR:', err);
+      setDatabaseError(`Erro no upsert: ${err.message}`);
+    } finally {
+      setUpserting(false);
+    }
   };
 
   // 🆕 Handler de processamento completo (importado do orchestration)
@@ -482,6 +526,98 @@ export default function AdminPage() {
         >
           {processing ? '⏳ Processando...' : '🚀 Processar e Salvar'}
         </button>
+
+        {/* 🆕 DIVISÓRIA - UPSERT Tabela Única */}
+        <div style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          margin: '20px 0', 
+          gap: '12px',
+          color: C.muted,
+          fontSize: '12px'
+        }}>
+          <div style={{ flex: 1, height: '1px', background: C.border }}></div>
+          <span>OU</span>
+          <div style={{ flex: 1, height: '1px', background: C.border }}></div>
+        </div>
+
+        {/* 🆕 UPSERT Tabela Única */}
+        <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: 16, marginBottom: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 12 }}>
+            🔄 UPSERT Tabela Única (lucrativo_games)
+          </div>
+          
+          {/* Data Selection */}
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: 'block', color: C.muted, fontSize: 12, marginBottom: 4 }}>
+              Data dos Jogos
+            </label>
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              style={{
+                background: C.surface,
+                color: C.text,
+                border: `1px solid ${C.border}`,
+                borderRadius: 6,
+                padding: '6px 10px',
+                fontSize: 13,
+                width: '100%'
+              }}
+            />
+          </div>
+
+          {/* UPSERT Button */}
+          <button
+            onClick={handleUpsert}
+            disabled={!csvContent || upserting}
+            style={{
+              background: csvContent && !upserting ? '#3fb950' : C.gray,
+              color: csvContent && !upserting ? '#fff' : '#555',
+              border: 'none', borderRadius: 6,
+              padding: '10px 20px', fontSize: 13,
+              fontWeight: 600, cursor: csvContent ? 'pointer' : 'not-allowed',
+              width: '100%',
+            }}
+          >
+            {upserting ? '⏳ Upserting...' : '🔄 UPSERT na Tabela Única'}
+          </button>
+
+          {/* Success/Error Messages */}
+          {successMessage && (
+            <div style={{
+              marginTop: 12,
+              padding: '8px 12px',
+              background: '#28a74520',
+              border: '1px solid #28a745',
+              borderRadius: 6,
+              color: '#28a745',
+              fontSize: 12
+            }}>
+              ✅ {successMessage}
+            </div>
+          )}
+
+          {databaseError && (
+            <div style={{
+              marginTop: 12,
+              padding: '8px 12px',
+              background: '#dc354520',
+              border: '1px solid #dc3545',
+              borderRadius: 6,
+              color: '#dc3545',
+              fontSize: 12
+            }}>
+              ❌ {databaseError}
+            </div>
+          )}
+
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 8, lineHeight: 1.4 }}>
+            💡 <strong>UPSERT</strong>: Insere jogos novos ou atualiza existentes na tabela única <code>lucrativo_games</code>. 
+            Mais eficiente que múltiplas tabelas separadas.
+          </div>
+        </div>
 
         {/* PASSO 3: Confirmação */}
         {processResult && (

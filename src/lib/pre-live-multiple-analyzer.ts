@@ -507,7 +507,13 @@ export class PreLiveMultipleAnalyzer {
 
     // Juntar todos os candidatos: combo (específicos) + mainMarket (fallback)
     const allCandidates = [...combo];
-    if (main?.label) allCandidates.push(main);
+    if (main && main.label) {
+      allCandidates.push({
+        label: main.label,
+        icon: main.icon || '🎯',
+        color: main.color || '#ffd600'
+      });
+    }
 
     // Ordenar por especificidade decrescente
     allCandidates.sort((a, b) => this.marketSpecificity(b.label) - this.marketSpecificity(a.label));
@@ -2053,8 +2059,18 @@ export class PreLiveMultipleAnalyzer {
 
     // 🆕 1️⃣ Sinfonia de Pardais — 1 card por jogo qualificado
     const sinfoniaGames = topGames.filter(g =>
-      detectPoisonTriggers(g).isPoison || (computeScore(g) as any)?.score > 0.60
+      detectPoisonTriggers(g).isPoison || (computeScore(g) as any)?.score > 0.50
     )
+
+    // 🆕 DEBUG: Log para diagnóstico
+    console.log(`[SINFONIA-DEBUG] Total jogos analisados: ${topGames.length}`);
+    console.log(`[SINFONIA-DEBUG] Jogos qualificados para sinfonia (threshold 50%): ${sinfoniaGames.length}`);
+    topGames.forEach((g, i) => {
+      const poison = detectPoisonTriggers(g);
+      const score = computeScore(g);
+      const scoreValue = typeof score === 'number' ? score : (score as any)?.score || 0;
+      console.log(`[SINFONIA-DEBUG] Jogo ${i+1}: ${g.match} | poison=${poison.isPoison} | score=${(scoreValue*100).toFixed(1)}%`);
+    });
 
     for (const g of sinfoniaGames) {
       const poison = detectPoisonTriggers(g)

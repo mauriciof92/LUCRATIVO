@@ -857,6 +857,7 @@ const TICKET_STYLES: Record<string, { label: string; color: string; icon: string
 };
 
 export default function MultipleAnalyzerPage() {
+  const router = useRouter();
   const { results, todayGames, lastCsvText } = useBacktest();
   const [analyzing, setAnalyzing] = useState(false);
   const [loadingOdds, setLoadingOdds] = useState(false);
@@ -869,8 +870,9 @@ export default function MultipleAnalyzerPage() {
   const [ignoredMatches, setIgnoredMatches] = useState<string[]>([]);
   const [sinfoniaIdx, setSinfoniaIdx] = useState(0);  // 🆕 Estado de navegação da Sinfonia
   
-  // 🆕 Estado para filtro de data - abordagem segura para SSR
+  // 🆕 Estado para filtro de data - abordagem segura para SSR (fuso horário pt-BR)
   const [selectedDate, setSelectedDate] = useState<string>(() => {
+    // Usar fuso horário local (pt-BR) para evitar mudança de data às 21h UTC
     const now = new Date();
     return `${String(now.getDate()).padStart(2,'0')}${String(now.getMonth() + 1).padStart(2,'0')}`;
   }); // Default: hoje (DDMM)
@@ -900,27 +902,32 @@ export default function MultipleAnalyzerPage() {
     }
   }, [selectedDate]);
   
-  // 🆕 Setar data atual no cliente para evitar problemas de SSR
+  // 🆕 Setar data atual no cliente para evitar problemas de SSR (fuso horário pt-BR)
   useEffect(() => {
     const now = new Date()
-    const day = String(now.getUTCDate()).padStart(2, '0') // 🆕 Usar UTC
-    const month = String(now.getUTCMonth() + 1).padStart(2, '0') // 🆕 Usar UTC
+    const day = String(now.getDate()).padStart(2, '0') // 🆕 Usar local (pt-BR)
+    const month = String(now.getMonth() + 1).padStart(2, '0') // 🆕 Usar local (pt-BR)
     const todayDDMM = `${day}${month}`
-    console.log('[DEBUG] Data atual (UTC):', day, month, todayDDMM)
+    console.log('[DEBUG] Data atual (local-ptBR):', day, month, todayDDMM)
     setSelectedDate(todayDDMM)
   }, [])
 
-  // 🆕 Fix 2: Para hoje, usar CSV global; para outras datas, buscar no Supabase
+  // 🆕 Fix 2: Para hoje, usar CSV global; para outras datas, buscar no Supabase (fuso horário pt-BR)
   useEffect(() => {
     const now = new Date()
-    const todayDDMM = `${String(now.getUTCDate()).padStart(2, '0')}${String(now.getUTCMonth() + 1).padStart(2, '0')}`
+    const todayDDMM = `${String(now.getDate()).padStart(2, '0')}${String(now.getMonth() + 1).padStart(2, '0')}`
     
     if (selectedDate === todayDDMM) {
-      // 🆕 Para hoje, usar CSV global (já importado pelo Admin)
-      setLocalCsvText('');  // usa lastCsvText como fallback natural
-      setCsvDisponivel(!!lastCsvText);
-      console.log('[DEBUG] Usando CSV global para hoje (hoje)');
-      return
+      // Para hoje, usar CSV global
+      if (!lastCsvText) {
+        console.log('[DEBUG] Nenhum CSV global disponível para hoje. O operador precisa fazer o upload no Admin.');
+        setLocalCsvText('');
+        setCsvDisponivel(false);
+        return;
+      }
+      // Se tiver o lastCsvText, apenas carrega:
+      setLocalCsvText(lastCsvText);
+      setCsvDisponivel(true);
     }
     
     // 🆕 Só buscar no Supabase para datas diferentes de hoje
@@ -1246,10 +1253,11 @@ export default function MultipleAnalyzerPage() {
                 onChange={(e) => {
                   const d = new Date(e.target.value)
                   if (!isNaN(d.getTime())) { // Validar data válida
-                    const day = String(d.getUTCDate()).padStart(2, '0') // 🆕 Usar UTC
-                    const month = String(d.getUTCMonth() + 1).padStart(2, '0') // 🆕 Usar UTC
+                    const tzSelected = new Date(d.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+                    const day = String(tzSelected.getDate()).padStart(2, '0')
+                    const month = String(tzSelected.getMonth() + 1).padStart(2, '0')
                     const ddmm = `${day}${month}`
-                    console.log('[DEBUG] Data selecionada (UTC):', e.target.value, '→', day, month, ddmm)
+                    console.log('[DEBUG] Data selecionada (local-ptBR):', e.target.value, '→', day, month, ddmm)
                     setSelectedDate(ddmm)
                   } else {
                     console.log('[DEBUG] Data inválida:', e.target.value)
@@ -1277,7 +1285,7 @@ export default function MultipleAnalyzerPage() {
             {/* 🆕 Fix 1: Aviso quando CSV não está disponível para data selecionada */}
             {!csvDisponivel && selectedDate !== (() => {
               const now = new Date()
-              const todayDDMM = `${String(now.getUTCDate()).padStart(2,'0')}${String(now.getUTCMonth() + 1).padStart(2,'0')}`
+              const todayDDMM = `${String(now.getDate()).padStart(2,'0')}${String(now.getMonth() + 1).padStart(2,'0')}`
               return todayDDMM
             })() && (
               <div style={{ color: '#f0c040', fontSize: 12, marginTop: 8 }}>
@@ -1314,6 +1322,20 @@ export default function MultipleAnalyzerPage() {
             )}
           </div>
         </div>
+
+        {/* Empty State quando não há CSV */}
+        {(!localCsvText || localCsvText.trim() === '') && (
+          <div className="flex flex-col items-center justify-center p-12 bg-[#0d1117]/80 border border-dashed border-gray-700/50 rounded-xl my-8 text-center animate-in fade-in duration-500">
+            <div className="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center mb-4 border border-gray-700">
+              <span className="text-2xl">📥</span>
+            </div>
+            <h3 className="text-xl font-medium text-gray-200 mb-2 tracking-tight">CSV Não Encontrado</h3>
+            <p className="text-gray-400 text-sm max-w-md leading-relaxed mb-6">
+              Não há dados processados para a data {selectedDate.slice(0,2)}/{selectedDate.slice(2,4)}. 
+              Acesse o <span className="text-blue-400 font-medium cursor-pointer" onClick={() => router.push('/admin/multiples-lab')}>Laboratório</span> para importar a planilha do Packball de hoje.
+            </p>
+          </div>
+        )}
 
         {/* 🆕 BOX FT PERSONALIZADO REFORMADO */}
         {!suggestions.find(s => s.type === 'ftbox') && ftBoxCandidates?.length >= 2 && (

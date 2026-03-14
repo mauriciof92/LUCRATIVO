@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { processNSGames, type BetResult } from '../../../lib/backtest';
-import { supabase, saveCsvDiario } from '../../../lib/supabase';
+import { supabaseServer, saveCsvDiario } from '../../../lib/supabase';
 import { generateDeterministicId } from '../../../lib/utils';
 import { validateBetResult } from '../../../lib/canonical';
 import { evaluateAllMarkets, TriggerEval } from '../../../lib/trigger-engine';
@@ -28,8 +28,8 @@ function getImportDateISO(hour: string): string {
   return new Date().toISOString().split('T')[0];
 }
 
-// Extrai data DDMM ("0803") do CSV para persistência
-function getImportDateDDMM(csvText: string): string {
+// Extrai data YYYY-MM-DD do CSV para persistência (padronizado)
+function getImportDateISOFromCSV(csvText: string): string {
   const lines = csvText.split('\n');
   // Pular primeira linha (cabeçalho) e ir para a primeira linha de dados
   for (let i = 1; i < lines.length; i++) {
@@ -40,16 +40,17 @@ function getImportDateDDMM(csvText: string): string {
         const hourField = fields[3]?.trim();
         if (hourField && hourField !== '"Hour"') {
           const iso = getImportDateISO(hourField);
-          const date = new Date(iso);
-          const ddmm = `${String(date.getUTCDate()).padStart(2, '0')}${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
-          return ddmm;
+          const tzDate = new Date(new Date(iso).toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+          const dataISO = `${tzDate.getFullYear()}-${String(tzDate.getMonth()+1).padStart(2,'0')}-${String(tzDate.getDate()).padStart(2,'0')}`;
+          return dataISO;
         }
       }
     }
   }
-  // Fallback: data atual
-  const now = new Date();
-  return `${String(now.getUTCDate()).padStart(2, '0')}${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+  // Fallback: data atual em YYYY-MM-DD
+  const tzDate = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  const dataISO = `${tzDate.getFullYear()}-${String(tzDate.getMonth()+1).padStart(2,'0')}-${String(tzDate.getDate()).padStart(2,'0')}`;
+  return dataISO;
 }
 
 export async function POST(request: NextRequest) {
@@ -135,7 +136,7 @@ export async function POST(request: NextRequest) {
         
         for (let i = 0; i < deduped.length; i += BATCH) {
           const batch = deduped.slice(i, i + BATCH);
-          const { data, error: upsertErr } = await supabase
+          const { data, error: upsertErr } = await supabaseServer
             .from('bet_results')
             .upsert(batch, { 
               onConflict: 'match,hour',
@@ -163,9 +164,9 @@ export async function POST(request: NextRequest) {
 
       // 4. Fazer upsert em csv_diario
       try {
-        const csvDataDDMM = getImportDateDDMM(csvText);
-        console.log(`[IMPORT-API] Salvando CSV bruto para data ${csvDataDDMM}`);
-        const csvSaved = await saveCsvDiario(csvDataDDMM, csvText);
+        const csvDataISO = getImportDateISOFromCSV(csvText);
+        console.log(`[IMPORT-API] Salvando CSV bruto para data ${csvDataISO}`);
+        const csvSaved = await saveCsvDiario(csvDataISO, csvText);
       } catch (e: any) {
         console.error('[IMPORT-API] Erro geral no Supabase:', e);
         errors.push(`Erro no Supabase: ${e.message}`);
@@ -181,6 +182,20 @@ export async function POST(request: NextRequest) {
         const { parseCSV } = await import('../../../engine');
         const { games } = parseCSV(csvText);
         
+        // 🆕 FASE 1: Matcher Otimizado - Obter fixture_ids da API
+        console.log('[MATCHER] Buscando fixture_ids otimizados...');
+        const csvDataISO = getImportDateISOFromCSV(csvText);
+        const { fetchOddsForCsvGames } = await import('../../../lib/footballApi');
+        const { matched, unmatched, reqUsed } = await fetchOddsForCsvGames(games, process.env.FOOTBALL_API_KEY!, csvDataISO);
+        
+        // Criar mapa de jogo → fixture_id
+        const fixtureMap: Record<string, number> = {};
+        matched.forEach(m => {
+          fixtureMap[m.csvMatch.home + ' x ' + m.csvMatch.away] = m.fixtureId;
+        });
+        
+        console.log(`[MATCHER] ✅ ${matched.length} jogos mapeados | ❌ ${unmatched.length} sem match | ${reqUsed} requisições usadas`);
+        
         // Salvar apenas APPROVED no Supabase
         for (const game of games) {
           try {
@@ -190,8 +205,9 @@ export async function POST(request: NextRequest) {
             const approved = evals.filter(e => e.status === 'APPROVED');
             
             for (const eval_ of approved) {
-              const { error: triggerErr } = await supabase.from('trigger_suggestions').upsert({
-                fixture_id: (game as any).fixtureId ?? null,
+              // 🚨 TEMPORÁRIO: Usar insert em vez de upsert até criar constraint única
+              const { error: triggerErr } = await supabaseServer.from('trigger_suggestions').insert({
+                fixture_id: fixtureMap[game.match] ?? null, // 🆕 Usar mapa otimizado
                 match_label: game.match,
                 market_id: eval_.marketId,
                 data_mode: matchInput.dataMode ?? 'csv_only',
@@ -206,7 +222,10 @@ export async function POST(request: NextRequest) {
                 confidence_score: eval_.confidenceScore,
                 status: eval_.status,
                 reason_codes: eval_.reasons,
-              }, { onConflict: 'fixture_id,market_id' });
+              });
+              
+              // TODO: Mudar para upsert quando a constraint única for criada
+              // }, { onConflict: 'fixture_id,market_id' });
               
               if (triggerErr) {
                 console.error(`[TRIGGER-SAVE] Erro ao salvar ${game.match} - ${eval_.marketId}:`, triggerErr.message);
@@ -223,20 +242,122 @@ export async function POST(request: NextRequest) {
         
         console.log(`[TRIGGER-SAVE] Concluído: ${triggerSavedCount} avaliações salvas, ${triggerErrors} erros`);
         
+        // 5. 🆕 FASE 2: Motor Único - Salvar jogos processados no Supabase
+        console.log('[PROCESSED-GAMES] Iniciando processamento completo para frontend...');
+        let processedSavedCount = 0;
+        let processedErrors = 0;
+
+        try {
+          // Importar funções de processamento
+          const { classifyProfile } = await import('../../../lib/poisson-engine');
+          const { computeScore, computeConfidence, suggestMainMarket, suggestCombo, getFavorito } = await import('../../../engine');
+          
+          // Processar todos os jogos com fixture_id mapeado
+          const processedGames = [];
+          for (const game of games) {
+            try {
+              const fixtureId = fixtureMap[game.match];
+              if (!fixtureId) continue; // Pular jogos sem match
+              
+              // Criar rowValues a partir das propriedades do game
+              const rowValues = Object.values(game).map(String);
+              
+              // Processamento completo (motor Poisson)
+              const profile = classifyProfile(rowValues);
+              const scoreResult = computeScore(game);
+              const score = typeof scoreResult === 'number' ? scoreResult : scoreResult?.score || 0;
+              const confResult = computeConfidence(game);
+              const conf = confResult?.score || 0;
+              const fav = getFavorito(game);
+              
+              // Gerar mercados principais e combos
+              let mainMarket = null;
+              let combo: any[] = [];
+              
+              // Pular perfis fracos
+              if (profile !== 'generic' && profile !== 'low_goals') {
+                mainMarket = suggestMainMarket(game);
+                combo = suggestCombo(game);
+              }
+              
+              // Estrutura para frontend
+              const processedGame = {
+                date: csvDataISO,
+                fixture_id: fixtureId,
+                match: game.match,
+                home: game.home,
+                away: game.away,
+                league: game.league,
+                hour: game.hour,
+                status: game.status,
+                profile,
+                score,
+                confidence: conf,
+                mainMarket,
+                combo,
+                rowValues,
+                oddsMap: {}, // 🆕 Será preenchido no frontend com odds em tempo real
+                // 🆕 Dados do favorito para mercado de chutes
+                favoriteTeam: fav.nome,
+                afDiff: fav.afDiff,
+                chFavGol: fav.chFavGol,
+                // 🆕 Timestamp para cache
+                processed_at: new Date().toISOString(),
+              };
+              
+              processedGames.push(processedGame);
+              
+            } catch (gameErr: any) {
+              console.error(`[PROCESSED-GAMES] Erro ao processar jogo ${game.match}:`, gameErr.message);
+              processedErrors++;
+            }
+          }
+          
+          // 🚨 TEMPORÁRIO: Desabilitar processed_games até a tabela ser criada
+          // TODO: Criar tabela processed_games no Supabase
+          console.log('[PROCESSED-GAMES] ⚠️ Funcionalidade desabilitada temporariamente');
+          console.log('[PROCESSED-GAMES] ⚠️ Execute o SQL em PROCESSED_GAMES_TABLE.sql para habilitar');
+          
+          // Salvar em lote no Supabase (desabilitado)
+          // if (processedGames.length > 0) {
+          //   const { error: processedErr } = await supabase
+          //     .from('processed_games')
+          //     .upsert(processedGames, { onConflict: 'fixture_id,date' });
+          //   
+          //   if (processedErr) {
+          //     console.error('[PROCESSED-GAMES] Erro ao salvar jogos processados:', processedErr);
+          //     processedErrors += processedGames.length;
+          //   } else {
+          //     processedSavedCount = processedGames.length;
+          //     console.log(`[PROCESSED-GAMES] ✅ ${processedSavedCount} jogos processados salvos com sucesso`);
+          //   }
+          // }
+          
+        } catch (e: any) {
+          console.error('[PROCESSED-GAMES] Erro geral:', e);
+          errors.push(`Erro ao salvar jogos processados: ${e.message}`);
+        }
+        
       } catch (e: any) {
         console.error('[TRIGGER-SAVE] Erro geral:', e);
         errors.push(`Erro ao salvar trigger suggestions: ${e.message}`);
       }
 
-      // 5. Salvar CSV diário (se houver jogos NS)
+      // 6. Salvar CSV diário (se houver jogos NS) - 🚨 TEMPORÁRIO DESABILITADO
       try {
         const nsGames = processedResults.filter(r => r.status === 'NS');
         if (nsGames.length > 0) {
-          await saveCsvDiario(csvText, getImportDateDDMM(csvText));
-          console.log(`[IMPORT-API] CSV diário salvo com ${nsGames.length} jogos NS`);
+          // 🚨 TEMPORÁRIO: Desabilitar salvamento do CSV diário
+          // O CSV é muito grande e causa erro de índice (10808 bytes > 8191 max)
+          console.log(`[CSV-DIARIO] ⚠️ Salvamento desabilitado - CSV muito grande (${csvText.length} chars)`);
+          console.log(`[CSV-DIARIO] ⚠️ Encontrados ${nsGames.length} jogos NS`);
+          
+          // TODO: Implementar compressão ou armazenamento alternativo
+          // await saveCsvDiario(csvText, getImportDateISOFromCSV(csvText));
+          // console.log(`[IMPORT-API] CSV diário salvo com ${nsGames.length} jogos NS`);
         }
       } catch (e: any) {
-        console.error('[IMPORT-API] Erro ao salvar CSV diário:', e);
+        console.error('[CSV-DIARIO] Erro ao salvar CSV diário:', e);
         errors.push(`Erro ao salvar CSV diário: ${e.message}`);
       }
 

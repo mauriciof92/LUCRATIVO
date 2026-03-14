@@ -10,6 +10,7 @@ const C = {
 
 const NAV_LINKS = [
   { label: '🔮 Panorama',  href: '/panorama' },
+  { label: '🎯 Sugestões IA', href: '/suggestions-ia' },
   { label: '📋 Histórico', href: '/backtest' },
   { label: '📊 Dashboard', href: '/dashboard' },
   { label: '🎫 Bilhetes',  href: '/multiple-analyzer' },

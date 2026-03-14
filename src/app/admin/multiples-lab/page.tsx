@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { NavHeader } from "../../../components/NavHeader";
 import { C, KPI as SharedKPI } from "../../../components/ui";
 import { Upload, Beaker, Save, AlertTriangle, CheckCircle } from "lucide-react";
+import { supabase } from "../../../lib/supabase";
 
 interface Leg {
   matchName: string;
@@ -17,6 +18,46 @@ interface MultipleResult {
   legs: Leg[];
   combined_prob: number;
   combined_fair_odd: number;
+}
+
+// Função para forçar o fuso horário local e retornar YYYY-MM-DD
+function getLocalISODate() {
+  const now = new Date();
+  const tzDate = new Date(now.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  return `${tzDate.getFullYear()}-${String(tzDate.getMonth() + 1).padStart(2,'0')}-${String(tzDate.getDate()).padStart(2,'0')}`;
+}
+
+async function saveCsvToSupabase(rawCsvText: string) {
+  const todayISO = getLocalISODate(); // Ex: '2026-03-13'
+  console.log(`[ADMIN] Salvando CSV na base única (Data: ${todayISO})...`);
+  console.log(`[ADMIN] Tamanho do CSV: ${rawCsvText.length} caracteres`);
+  console.log(`[ADMIN] Primeiras 100 chars: ${rawCsvText.substring(0, 100)}...`);
+  
+  const { error } = await supabase
+    .from('csv_diario')
+    .upsert(
+      { data: todayISO, csv_text: rawCsvText }, 
+      { onConflict: 'data' } // Sobrescreve se já existir um CSV para hoje
+    );
+
+  if (error) {
+    console.error('[ADMIN] Erro ao salvar base diária:', error);
+    console.error('[ADMIN] Detalhes do erro:', JSON.stringify(error, null, 2));
+  } else {
+    console.log('[ADMIN] Base diária salva com sucesso no Supabase!');
+    // Verificar se realmente salvou
+    const { data: verifyData, error: verifyError } = await supabase
+      .from('csv_diario')
+      .select('csv_text')
+      .eq('data', todayISO)
+      .single();
+    
+    if (verifyError) {
+      console.error('[ADMIN] Erro ao verificar salvamento:', verifyError);
+    } else {
+      console.log('[ADMIN] Verificação OK - CSV salvo com', verifyData?.csv_text?.length, 'caracteres');
+    }
+  }
 }
 
 interface LabResults {
@@ -55,9 +96,12 @@ export default function MultiplesLabPage() {
     
     // Ler e parsear CSV para array de linhas
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const text = e.target?.result as string;
+        
+        // 🆕 Salvar CSV no Supabase (fonte única)
+        await saveCsvToSupabase(text);
         
         // CORREÇÃO OBRIGATÓRIA — parseLabCSV para dividir por ';'
         const parseLabCSV = (raw: string): string[][] => {

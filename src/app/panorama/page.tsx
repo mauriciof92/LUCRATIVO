@@ -1,10 +1,13 @@
 'use client';
-import { useState, useMemo, useEffect } from 'react';
+
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { useBacktest, STAKE_FIXA } from '../../hooks/useBacktest';
-import { analyzeLiveMultiplesAsync } from '../../lib/pre-live-multiple-analyzer';
 import { NavHeader } from '../../components/NavHeader';
-import { ProfileBadge, PoisonBadges, FavoritoBar, KPI as KpiCard, C, EmptyState } from '../../components/ui';
+import { C } from '../../components/ui';
+import { useBacktest, STAKE_FIXA } from '../../hooks/useBacktest';
+import { supabase } from '../../lib/supabase';
+import { analyzeLiveMultiplesAsync } from '../../lib/pre-live-multiple-analyzer';
+import { ProfileBadge, PoisonBadges, FavoritoBar, KPI as KpiCard, EmptyState } from '../../components/ui';
 
 // Estado da data selecionada (default = hoje)
 const today = new Date();
@@ -97,6 +100,50 @@ function GameCard({ game }: { game: any }) {
 
       <div style={{ fontWeight: 600, marginBottom: 4 }}>{game.match}</div>
 
+      {/* 🆕 TAGS DE PERFIL */}
+      <div style={{ marginBottom: 6 }}>
+        {game.profile === 'generic' && (
+          <span className="bg-gray-800 text-gray-400 text-xs px-2 py-1 rounded border border-gray-700">
+            💤 Sem Narrativa Clara
+          </span>
+        )}
+        {game.profile === 'low_goals' && (
+          <span className="bg-orange-900 text-orange-300 text-xs px-2 py-1 rounded border border-orange-800">
+            🔒 Tendência Under
+          </span>
+        )}
+        {game.profile === 'dominant' && (
+          <span className="bg-red-900 text-red-300 text-xs px-2 py-1 rounded border border-red-800">
+            🔥 Dominância Absoluta
+          </span>
+        )}
+        {game.profile === 'chutes_ht_fav' && (
+          <span className="bg-yellow-900 text-yellow-300 text-xs px-2 py-1 rounded border border-yellow-800">
+            🎯 Pressão HT
+          </span>
+        )}
+        {game.profile === 'balanced_btts' && (
+          <span className="bg-purple-900 text-purple-300 text-xs px-2 py-1 rounded border border-purple-800">
+            💜 Ambas Marcam
+          </span>
+        )}
+        {game.profile === 'high_offense_balanced' && (
+          <span className="bg-green-900 text-green-300 text-xs px-2 py-1 rounded border border-green-800">
+            ⚡ Alta Ofensiva
+          </span>
+        )}
+        {game.profile === 'shootout_btts' && (
+          <span className="bg-indigo-900 text-indigo-300 text-xs px-2 py-1 rounded border border-indigo-800">
+            🔥 Tiroteio
+          </span>
+        )}
+        {game.profile === 'corner_dominant' && (
+          <span className="bg-blue-900 text-blue-300 text-xs px-2 py-1 rounded border border-blue-800">
+            🚩 Cantos
+          </span>
+        )}
+      </div>
+
       {/* MERCADO PRINCIPAL */}
       <div className="principal-market" style={{
         background: '#3fb950', color: 'white', padding: '8px 12px',
@@ -156,13 +203,28 @@ export default function PanoramaPage() {
   const router = useRouter();
   const { results, summary, loading, todayGames, lastCsvText } = useBacktest();
 
+  // 🆕 Verificação de versão para evitar cache antigo
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const currentVersion = '2026-03-14-v2'; // Incrementar quando mudar o código
+      const storedVersion = sessionStorage.getItem('panorama-version');
+      
+      if (storedVersion !== currentVersion) {
+        console.log('[PANORAMA] Versão atualizada, forçando reload...');
+        sessionStorage.setItem('panorama-version', currentVersion);
+        window.location.reload();
+        return;
+      }
+    }
+  }, []);
+
   // Estado da data selecionada (default = hoje)
   const [selectedDate, setSelectedDate] = useState(todayStr);
   
   // Converter YYYY-MM-DD → DDMM para o analyzer
   const selectedDDMM = selectedDate.slice(8,10) + selectedDate.slice(5,7);
 
-  // 🆕 Processar jogos NS com Cantos FT
+  // 🆕 Processar jogos NS com Cantos FT (mantido para compatibilidade)
   const [nsGames, setNsGames] = useState<any[]>([]);
   const [processingNs, setProcessingNs] = useState(false);
 
@@ -172,60 +234,28 @@ export default function PanoramaPage() {
     setProcessingNs(false);
   }, [selectedDate]);
 
-  // Processar jogos NS quando lastCsvText estiver disponível
-  useEffect(() => {
-    if (!lastCsvText) return;
-    if (!lastCsvText || lastCsvText.trim() === '') return;
-    // Removido: if (nsGames.length > 0) return; // Permitir reprocessamento quando data mudar
+  // 🆕 Fonte única: lucrativo_games
+  const [panoramaGames, setPanoramaGames] = useState<any[]>([]);
 
-    setProcessingNs(true);
-    (async () => {
-      try {
-        console.log('[PANORAMA] Buscando odds reais (compartilhando cache com Múltiplas)...');
-        
-        // 1. Buscar odds (virá do cache se já foi buscado antes)
-        const today = new Date().toISOString().split('T')[0];
-        const oddsRes = await fetch('/api/football-odds', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ csvText: lastCsvText, date: today }),
-        });
-        
-        const { oddsMap, fixtureMap } = oddsRes.ok 
-          ? await oddsRes.json() 
-          : { oddsMap: {}, fixtureMap: {} }; // fallback silencioso
-        
-        console.log(`[PANORAMA] Odds recebidas: ${Object.keys(oddsMap || {}).length} com odds reais`);
-        
-        // 2. Passar para o analyzer (igual às Múltiplas)
-        console.log('[PANORAMA] Processando jogos NS com odds reais...');
-        const analysis = await analyzeLiveMultiplesAsync(
-          lastCsvText, 
-          oddsMap, 
-          fixtureMap, 
-          [], 
-          selectedDDMM,
-          'panorama'
-        );
-        
-        setNsGames(analysis.games ?? []); // ← guardar jogos completos do analyzer
-        console.log(`[PANORAMA] ${analysis.games?.length || 0} jogos NS processados com Cantos FT + odds reais`);
-      } catch (error) {
-        console.error('[PANORAMA] Erro ao processar jogos NS:', error);
-        // Fallback: processar sem odds reais
-        try {
-          console.log('[PANORAMA] Fallback: processando sem odds reais...');
-          const analysis = await analyzeLiveMultiplesAsync(lastCsvText, undefined, undefined, [], selectedDDMM, 'panorama');
-          setNsGames(analysis.games ?? []);
-          console.log(`[PANORAMA] ${analysis.games?.length || 0} jogos NS processados (fallback sem odds)`);
-        } catch (fallbackError) {
-          console.error('[PANORAMA] Erro no fallback:', fallbackError);
-        }
-      } finally {
-        setProcessingNs(false);
+  useEffect(() => {
+    async function loadPanoramaGames() {
+      const { data, error } = await supabase
+        .from('lucrativo_games')
+        .select('*')
+        .eq('date', selectedDate)
+        .order('imported_at', { ascending: false });
+
+      if (error) {
+        console.warn('[PANORAMA] Erro no banco:', error);
+        return; // Fallback silencioso
       }
-    })();
-  }, [lastCsvText, selectedDDMM]);
+
+      setPanoramaGames(data || []);
+      console.log(`[PANORAMA] ${data?.length || 0} jogos carregados da tabela única`);
+    }
+
+    loadPanoramaGames();
+  }, [selectedDate]);
 
   // Total de jogos no CSV para stats
   const csvGamesCount = lastCsvText ? lastCsvText.split('\n').filter(line => line.trim()).length - 1 : 0;
@@ -263,24 +293,24 @@ export default function PanoramaPage() {
 
   // Ligas e mercados únicos para os selects de filtro
   const availableLeagues = useMemo(() => {
-    const source = nsGames?.length > 0 ? nsGames : (todayGames ?? results);
+    const source = panoramaGames?.length > 0 ? panoramaGames : (todayGames ?? results);
     return Array.from(new Set(source.map((g: any) =>
       g.league).filter(Boolean))).sort();
-  }, [nsGames, todayGames, results]);
+  }, [panoramaGames, todayGames, results]);
 
   // Jogos filtrados e ordenados
   const games = useMemo(() => {
     let list: any[];
 
-    if (selectedDate !== todayStr && nsGames.length > 0) {
-      // CASO 1: Data futura → analyzer é a fonte (CSV filtrado por selectedDDMM)
-      list = [...nsGames];
+    if (selectedDate !== todayStr && panoramaGames.length > 0) {
+      // CASO 1: Data futura → usar panoramaGames (tabela única)
+      list = [...panoramaGames];
 
     } else if (selectedDate === todayStr) {
-      // CASO 2: Hoje → priorizar nsGames processados pelo analyzer
-      if (nsGames.length > 0) {
-        // nsGames tem os jogos de hoje processados pelo analyzer — usar direto
-        list = [...nsGames];
+      // CASO 2: Hoje → priorizar panoramaGames (tabela única)
+      if (panoramaGames.length > 0) {
+        // panoramaGames tem os jogos de hoje da tabela única — usar direto
+        list = [...panoramaGames];
       } else {
         // fallback: DB sem analyzer
         const baseMap = new Map<string, any>();
@@ -388,7 +418,7 @@ export default function PanoramaPage() {
       sortBy === 'hora'   ? extractTime(a.hour) - extractTime(b.hour) :
       (a.league ?? '').localeCompare(b.league ?? '')
     );
-  }, [nsGames, todayGames, results, selectedDate, filterTier, filterLeague, filterMarket, sortBy]);
+  }, [panoramaGames, todayGames, results, selectedDate, filterTier, filterLeague, filterMarket, sortBy]);
 
   const isToday = selectedDate === todayStr;
 
@@ -497,7 +527,7 @@ export default function PanoramaPage() {
           <div className="stats" style={{ 
             fontSize:14, fontWeight:600, color:'#f0c040', marginBottom:8 
           }}>
-            ⭐ Jogos do Dia — {nsGames.length}/{csvGamesCount} qualificados (NS)
+            ⭐ Jogos do Dia — {panoramaGames.length}/{csvGamesCount} qualificados (Tabela Única)
           </div>
           <div className="stats-bar" style={{ 
             display:'flex', gap:16, marginBottom:12,

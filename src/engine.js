@@ -469,9 +469,9 @@ export function extractDateFromHour(hour) {
   // ISO: YYYY-MM-DD
   const iso = h.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (iso) return iso[3] + iso[2]; // "2502"
-  // Sem data → usar data atual do sistema
-  const now = new Date();
-  return String(now.getDate()).padStart(2, '0') + String(now.getMonth() + 1).padStart(2, '0');
+  // Sem data → usar data atual do sistema (fuso pt-BR)
+  const tzDate = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  return String(tzDate.getDate()).padStart(2, '0') + String(tzDate.getMonth() + 1).padStart(2, '0');
 }
 
 export function parseCSV(text) {
@@ -886,124 +886,502 @@ export const PROFILES = {
 };
 
 /* ─────────────────────────────────────────
-   MERCADO PRINCIPAL
+   PRESSÃO HT - SISTEMA COMPLETO DE SUGESTÕES
 ───────────────────────────────────────── */
+
+// 🎯 Critérios de qualidade para Pressão HT
+const pressaoHTCriteria = {
+  minChFavGol: 4.0,          // Mínimo 4 chutes ao gol HT
+  minChFavTot: 6.0,          // Mínimo 6 chutes totais HT
+  minAfDiff: 20,             // Diferença AF mínima
+  minAfFav: 55,              // AF do favorito mínimo
+  minExG: 2.5,               // xG total mínimo
+  minAsPrec: 35,             // Precisão passes mínima
+  minAppg: 0.75,             // Ações por posse de gol mínimas
+  maxCvChutes: 70,           // CV de chutes máximo
+  maxCvCantosHT: 65,         // CV de cantos HT máximo
+  maxDfZebra: 45,            // Defesa zebra máxima
+  minBlitzGap: 25            // Gap ofensivo mínimo para Blitz
+};
+
+// 🎯 Hierarquia de sugestões Pressão HT
+const pressaoHTLines = [
+  {
+    priority: 1,
+    type: "dominance_extreme",
+    condition: (fav, g) => fav.chFavGol >= 9,
+    lines: [
+      { base: 6.5, icon: "🔥", label: "Dominância Extrema" },
+      { base: 7.5, icon: "🚀", label: "Pressão Máxima" }
+    ],
+    minOdds: { 6.5: 1.70, 7.5: 2.00 },
+    requiredEV: 0.15
+  },
+  {
+    priority: 2,
+    type: "blitz_pressure",
+    condition: (fav, g) => {
+      const dfZebra = fav.lado === '🏠' ? g.dfA : g.dfH;
+      const blitzGap = fav.afFav - dfZebra;
+      return fav.chFavGol >= 6.5 && blitzGap >= 35 && dfZebra < 40;
+    },
+    lines: [
+      { base: 5.5, icon: "⚡", label: "Blitz HT" },
+      { base: 4.5, icon: "🎯", label: "Pressão Blitz" }
+    ],
+    minOdds: { 5.5: 1.55, 4.5: 1.45 },
+    requiredEV: 0.12
+  },
+  {
+    priority: 3,
+    type: "elite_pressure",
+    condition: (fav, g) => fav.chFavGol >= 7 && fav.chFavTot >= 8,
+    lines: [
+      { base: 5.5, icon: "🎯", label: "Elite Pressão" },
+      { base: 4.5, icon: "⚽", label: "Pressão Elite" }
+    ],
+    minOdds: { 5.5: 1.50, 4.5: 1.40 },
+    requiredEV: 0.10
+  },
+  {
+    priority: 4,
+    type: "consistent_pressure",
+    condition: (fav, g) => fav.chFavGol >= 5 && fav.chFavTot >= 6,
+    lines: [
+      { base: 4.5, icon: "🎯", label: "Pressão Consistente" },
+      { base: 3.5, icon: "📍", label: "Pressão Moderada" }
+    ],
+    minOdds: { 4.5: 1.40, 3.5: 1.35 },
+    requiredEV: 0.08
+  },
+  {
+    priority: 5,
+    type: "fallback_pressure",
+    condition: (fav, g) => fav.chFavGol >= 4,
+    lines: [
+      { base: 3.5, icon: "📍", label: "Pressão Base" },
+      { base: 2.5, icon: "🔹", label: "Pressão Mínima" }
+    ],
+    minOdds: { 3.5: 1.30, 2.5: 1.25 },
+    requiredEV: 0.05
+  }
+];
+
+// 🎯 Função para validar se jogo atende aos critérios Pressão HT
+function meetsPressaoHTCriteria(fav, g) {
+  const criteria = pressaoHTCriteria;
+  
+  // Dados OFENSIVOS
+  if (fav.chFavGol < criteria.minChFavGol) return false;
+  if (fav.chFavTot < criteria.minChFavTot) return false;
+  if (fav.afDiff < criteria.minAfDiff) return false;
+  if (fav.afFav < criteria.minAfFav) return false;
+  
+  // Dados GERAIS
+  if (g.exG < criteria.minExG) return false;
+  if ((g.asPrecisao || 0) < criteria.minAsPrec) return false;
+  if ((g.appg || 0) < criteria.minAppg) return false;
+  
+  // Consistência
+  if ((g.cvChutes || 100) > criteria.maxCvChutes) return false;
+  if ((g.cvCantosHT || 100) > criteria.maxCvCantosHT) return false;
+  
+  return true;
+}
+
+// 🎯 Cálculo de probabilidade específico para Pressão HT
+function calculatePressaoHTProbability(fav, g, line) {
+  // Base inicial
+  let prob = 0.5;
+  
+  // Fator principal: chFavGol vs linha
+  const shotsRatio = fav.chFavGol / line;
+  prob += (shotsRatio - 1) * 0.15; // +15% por cada shot acima da linha
+  
+  // Bônus por volume total
+  if (fav.chFavTot >= 8) prob += 0.05;
+  else if (fav.chFavTot >= 6) prob += 0.03;
+  
+  // Bônus por consistência (CV baixo)
+  const cvChutes = g.cvChutes || 100;
+  if (cvChutes <= 50) prob += 0.04;
+  else if (cvChutes <= 70) prob += 0.02;
+  
+  // Bônus por gap ofensivo
+  const dfZebra = fav.lado === '🏠' ? g.dfA : g.dfH;
+  const blitzGap = fav.afFav - dfZebra;
+  if (blitzGap >= 40) prob += 0.06;
+  else if (blitzGap >= 25) prob += 0.03;
+  
+  // Bônus por precisão
+  const asPrec = g.asPrecisao || 0;
+  if (asPrec >= 40) prob += 0.03;
+  else if (asPrec >= 35) prob += 0.01;
+  
+  // Bônus por xG
+  if (g.exG >= 3.0) prob += 0.02;
+  else if (g.exG >= 2.5) prob += 0.01;
+  
+  // Limitar probabilidade máxima
+  return Math.min(0.85, Math.max(0.25, prob));
+}
+
+// 🎯 Cálculo de confiança para Pressão HT
+function calculatePressaoHTConfidence(fav, g) {
+  let confidence = 0.5;
+  
+  // Base em chFavGol
+  confidence += Math.min(fav.chFavGol * 0.05, 0.25);
+  
+  // Bônus por afDiff
+  confidence += Math.min(fav.afDiff * 0.002, 0.15);
+  
+  // Penalidade por CV alto
+  const cvChutes = g.cvChutes || 100;
+  if (cvChutes > 70) confidence -= 0.1;
+  else if (cvChutes > 50) confidence -= 0.05;
+  
+  // Bônus por dados completos
+  if (g.asPrecisao > 0 && g.appg > 0) confidence += 0.1;
+  
+  return Math.min(0.95, Math.max(0.3, confidence));
+}
+
+// 🎯 Função para validar linha específica de Pressão HT
+function validatePressaoHTLine(fav, g, lineConfig) {
+  const { base, icon, label, minOdds, requiredEV } = lineConfig;
+  
+  // Validar linha máxima (10.5 HT)
+  if (base > 10.5) {
+    return {
+      valid: false,
+      reason: `Linha ${base} excede máximo de 10.5 HT`
+    };
+  }
+  
+  // Validar volume mínimo
+  if (fav.chFavGol < base - 2) {
+    return {
+      valid: false,
+      reason: `Volume ${fav.chFavGol} insuficiente para linha ${base}`
+    };
+  }
+  
+  // Verificar odds
+  const odd = getOddForLabel(g, `Over ${base} Finalizações HT`);
+  if (!odd) {
+    return {
+      valid: false,
+      reason: `Odd não disponível para linha ${base}`
+    };
+  }
+  
+  const minOdd = minOdds[base] || 1.30;
+  if (odd < minOdd) {
+    return {
+      valid: false,
+      reason: `Odd ${odd} abaixo do mínimo ${minOdd}`
+    };
+  }
+  
+  // Calcular EV
+  const prob = calculatePressaoHTProbability(fav, g, base);
+  const ev = (prob * odd) - 1;
+  
+  if (ev < requiredEV) {
+    return {
+      valid: false,
+      reason: `EV ${(ev * 100).toFixed(1)}% abaixo do mínimo ${(requiredEV * 100).toFixed(1)}%`
+    };
+  }
+  
+  return {
+    valid: true,
+    suggestion: {
+      label: `${fav.lado} ${fav.nome} — ${label} Over ${base} Finalizações HT`,
+      axis: "chutes_ht",
+      icon: icon,
+      color: "#ffd600",
+      odd: odd,
+      ev: ev,
+      probability: prob,
+      confidence: calculatePressaoHTConfidence(fav, g),
+      stats: {
+        chFavGol: fav.chFavGol,
+        chFavTot: fav.chFavTot,
+        afDiff: fav.afDiff,
+        exG: g.exG,
+        line: base
+      }
+    }
+  };
+}
+
+// 🎯 Função completa para sugerir linhas de Pressão HT
+export function suggestPressaoHTLines(g) {
+  const fav = getFavorito(g);
+  const profile = classifyProfile(g);
+  
+  // Verificar se é perfil Pressão HT
+  if (profile !== "chutes_ht_fav") return [];
+  
+  const suggestions = [];
+  const excludedLeagues = [
+    "Championship", "Liga BetPlay", "Carioca Serie A", "League One",
+    "AFC Champions League Elite", "Eredivisie", "1. Lig",
+    "Europa Conference League", "Pro League", "Eerste Divisie", "Super Lig"
+  ];
+  
+  const allowsHT = !excludedLeagues.some(excluded => 
+    (g.league || '').toLowerCase().includes(excluded.toLowerCase())
+  );
+  
+  if (!allowsHT) return [];
+  
+  // Verificar critérios mínimos
+  if (!meetsPressaoHTCriteria(fav, g)) return [];
+  
+  // Iterar por prioridade
+  for (const lineGroup of pressaoHTLines) {
+    if (!lineGroup.condition(fav, g)) continue;
+    
+    for (const lineConfig of lineGroup.lines) {
+      const validation = validatePressaoHTLine(fav, g, lineConfig);
+      
+      if (validation.valid) {
+        suggestions.push({
+          ...validation.suggestion,
+          priority: lineGroup.priority,
+          type: lineGroup.type,
+          profile: "chutes_ht_fav"
+        });
+      }
+    }
+  }
+  
+  return suggestions.sort((a, b) => a.priority - b.priority);
+}
+
+/* ─────────────────────────────────────────
+   VALIDAÇÃO DE LINHAS HT - LIMITE MÁXIMO 10.5
+───────────────────────────────────────── */
+
+// 🎯 Função para validar linha de finalizações HT com limite máximo
+function validateHTShotsLine(shots, line, maxLine = 10.5) {
+  const parsedLine = parseFloat(line.match(/over (\d+\.?\d*)/i)?.[1] ?? 0);
+  const cappedLine = Math.min(parsedLine, maxLine);
+  
+  // Bloquear se shots insuficientes ou linha extrema
+  if (shots < 6 || parsedLine > maxLine) {
+    return {
+      blocked: true, 
+      justification: `Linha extrema HT (máximo: ${maxLine})`,
+      cappedLine: null
+    };
+  }
+  
+  return {
+    blocked: false,
+    justification: `Linha válida: ${cappedLine}`,
+    cappedLine: cappedLine
+  };
+}
+
+// 🎯 Função segura para criar linha de finalizações HT
+function createHTShotsLine(fav, baseLine, maxLine = 10.5) {
+  const shots = fav.chFavGol || 0;
+  const validation = validateHTShotsLine(shots, baseLine, maxLine);
+  
+  if (validation.blocked) {
+    return null; // Não criar linha se bloqueada
+  }
+  
+  return `${fav.lado} ${fav.nome} — Finalizações HT Over ${validation.cappedLine}`;
+}
+
+/* ─────────────────────────────────────────
+   MERCADO PRINCIPAL - SISTEMA ELITE v2.0
+───────────────────────────────────────── */
+
+// 🎯 Definição de mercados prioritários com critérios específicos
+const priorityMarkets = [
+  {
+    type: 'cantos-ft', 
+    minEV: 0.15, 
+    minOdd: 1.40,
+    label: 'Over 8.5 Cantos FT',
+    axis: 'cantos',
+    icon: '🚩',
+    color: '#00c2ff',
+    validate: (g) => {
+      const exC = g.exC || 0;
+      const cvCantos = g.cvCantos || 0;
+      return exC >= 10.0 && cvCantos <= 40;
+    }
+  },
+  {
+    type: 'chutes-ht', 
+    minEV: 0.12, 
+    minOdd: 1.45,
+    label: 'Finalizações HT Over 4.5',
+    axis: 'chutes_ht',
+    icon: '🎯',
+    color: '#ffd600',
+    validate: (g) => {
+      const fav = getFavorito(g);
+      const excludedLeagues = [
+        "Championship", "Liga BetPlay", "Carioca Serie A", "League One",
+        "AFC Champions League Elite", "Eredivisie", "1. Lig",
+        "Europa Conference League", "Pro League", "Eerste Divisie", "Super Lig"
+      ];
+      const allowsHT = !excludedLeagues.some(excluded => 
+        (g.league || '').toLowerCase().includes(excluded.toLowerCase())
+      );
+      return allowsHT && fav && fav.chFavGol >= 5;
+    }
+  },
+  {
+    type: 'over25', 
+    minXG: 3.0, 
+    minOdd: 1.60,
+    label: 'Over 2.5 FT',
+    axis: 'gols',
+    icon: '⚽',
+    color: '#00e676',
+    validate: (g) => {
+      const exG = g.exG || 0;
+      return exG >= 3.0;
+    }
+  },
+  {
+    type: 'over15', 
+    minOdd: 1.35,
+    label: 'Over 1.5 FT',
+    axis: 'gols',
+    icon: '⚽',
+    color: '#00e676',
+    validate: (g) => {
+      const exG = g.exG || 0;
+      return exG >= 2.0; // mínimo razoável para Over 1.5
+    }
+  }
+];
+
+// 🎯 Função para validar se um mercado atende aos critérios
+function meetsCriteria(market, game) {
+  if (!market.validate) return false;
+  
+  // Validar critérios específicos do mercado
+  if (!market.validate(game)) return false;
+  
+  // Verificar odd mínima
+  const odd = getOddForLabel(game, market.label);
+  if (!odd || odd < market.minOdd) return false;
+  
+  // Calcular EV se necessário
+  if (market.minEV !== undefined) {
+    const ev = calculateExpectedValue(game, market);
+    if (ev < market.minEV) return false;
+  }
+  
+  // Verificar xG mínimo se especificado
+  if (market.minXG !== undefined) {
+    const xG = game.exG || 0;
+    if (xG < market.minXG) return false;
+  }
+  
+  return true;
+}
+
+// 🎯 Função para obter mercado válido
+function validMarket(market, game) {
+  if (!meetsCriteria(market, game)) return null;
+  
+  const odd = getOddForLabel(game, market.label);
+  const ev = market.minEV !== undefined ? calculateExpectedValue(game, market) : null;
+  
+  return {
+    label: market.label,
+    axis: market.axis,
+    icon: market.icon,
+    color: market.color,
+    odd: odd,
+    ev: ev,
+    type: market.type,
+    priority: priorityMarkets.indexOf(market)
+  };
+}
+
+// 🎯 Função para calcular Expected Value (EV)
+function calculateExpectedValue(game, market) {
+  const odd = getOddForLabel(game, market.label);
+  if (!odd) return null;
+  
+  // Lógica simplificada de EV baseada no tipo de mercado
+  let prob = 0.5; // base
+  
+  switch (market.type) {
+    case 'cantos-ft':
+      // Probabilidade baseada em exC e consistência
+      const exC = game.exC || 0;
+      const cvCantos = game.cvCantos || 0;
+      prob = Math.min(0.85, 0.5 + (exC - 10) * 0.03 + (40 - cvCantos) * 0.005);
+      break;
+      
+    case 'chutes-ht':
+      // Probabilidade baseada em chutes no gol
+      const fav = getFavorito(game);
+      if (fav && fav.chFavGol) {
+        prob = Math.min(0.80, 0.4 + fav.chFavGol * 0.08);
+      }
+      break;
+      
+    case 'over25':
+      // Probabilidade baseada em xG
+      const xG = game.exG || 0;
+      prob = Math.min(0.75, 0.3 + xG * 0.15);
+      break;
+      
+    case 'over15':
+      // Probabilidade baseada em xG (mais conservadora)
+      const xG15 = game.exG || 0;
+      prob = Math.min(0.85, 0.5 + xG15 * 0.15);
+      break;
+  }
+  
+  return (prob * odd) - 1; // EV = (prob * odd) - 1
+}
+
+// 🎯 Nova função suggestMainMarket elite
 export function suggestMainMarket(g) {
   const score = getScore(g);
   
-  // FILTRO DE ELITE - Só sugerir se score >= 50% (mais flexível para calibragem)
+  // FILTRO DE ELITE - Só sugerir se score >= 50%
   if (score < 0.50) return null;
-  const fav = getFavorito(g);
-  // HIERARQUIA DE EXIBIÇÃO - Preferência Ativa por Mercados HT [EMENDA v1.3]
+  
+  // 🎯 Verificar se é perfil Pressão HT e usar sistema especializado
   const profile = classifyProfile(g);
-  
-  // GARANTIA DE EXIBIÇÃO POR PERFIL - Cantos obrigatório [AJUSTE DE CAPTAÇÃO]
-  if (profile === "corner_dominant" || profile === "corner_heavy") {
-    // Sempre exibir mercado de cantos para estes perfis
-    const cantHFav = fav.cantFavHT;
-    const thresholdCantos = (fav.afFav > 80) ? 4.2 : 5.0;
-    const cvCantosLimit = 65; // Flexibilização para perfis de cantos
-    
-    if (cantHFav >= thresholdCantos && (g.cvCantosHT || 0) <= cvCantosLimit) {
-      return { label: `${fav.lado} ${fav.nome} — Over 3.5 Cantos HT`, axis: "cantos_ht", icon: "🚩", color: "#00c2ff" };
-    }
-    // Fallback para cantos FT se HT não viável
-    if (g.exC >= 10.0 && (g.cvCantos || 0) <= 45) {
-      return { label: "Over 8.5 Cantos FT", axis: "cantos", icon: "🚩", color: "#00c2ff" };
+  if (profile === "chutes_ht_fav") {
+    const pressaoSuggestions = suggestPressaoHTLines(g);
+    if (pressaoSuggestions.length > 0) {
+      return pressaoSuggestions[0]; // Retornar a melhor sugestão de Pressão HT
     }
   }
   
-  // Prioridade: Cantos HT (se viável)
-  if (profile === "corner_heavy") {
-    const cantHFav = fav.cantFavHT;
-    const thresholdCantos = (fav.afFav > 80) ? 4.8 : 5.0;
-    if (cantHFav >= thresholdCantos && (g.cvCantosHT || 0) <= 55) {
-      return { label: `${fav.lado} ${fav.nome} — Over 3.5 Cantos HT`, axis: "cantos_ht", icon: "🚩", color: "#00c2ff" };
-    }
-  }
-
-  // Fallback: Lógica tradicional
-  const excludedLeaguesForHT = [
-    "Championship",
-    "Liga BetPlay",
-    "Carioca Serie A",
-    "League One",
-    "AFC Champions League Elite",
-    "Eredivisie",
-    "1. Lig",
-    "Europa Conference League",
-    "Pro League",
-    "Eerste Divisie",
-    "Super Lig"
-  ];
-
-  // ✅ Verifica se o campeonato permite finalizações HT
-  const allowsHTFinalizations = !excludedLeaguesForHT.some(excluded => 
-    (g.league || '').toLowerCase().includes(excluded.toLowerCase())
-  );
-
-  switch (profile) {
-    case "dominant":
-      return { label: `${fav.lado} ${fav.nome} Vence + Over 1.5 FT`, axis: "fav_gols",  icon: "🔥", color: "#ff1744"    };
-
-    case "chutes_ht_fav": {
-      // Se não permite HT, usa alternativa
-      if (!allowsHTFinalizations) {
-        return { label: "Over 1.5 FT", axis: "gols", icon: "⚽", color: "#00e676" };
+  // 🎯 Sistema de prioridade: encontrar o melhor mercado válido
+  let bestMarket = null;
+  
+  for (const market of priorityMarkets) {
+    const valid = validMarket(market, g);
+    if (valid) {
+      // Se não tem mercado ainda, ou este tem prioridade maior
+      if (!bestMarket || valid.priority < bestMarket.priority) {
+        bestMarket = valid;
       }
-      // GATILHO MANTEIGA: defesa adversária < 35 + ataque fav > 75 → eleva linha +1
-      const dfZebraMain = fav.lado === '🏠' ? g.dfA : g.dfH;
-      const manteiga = dfZebraMain > 0 && dfZebraMain < 35 && fav.afFav > 75;
-      // Buffer +1 em cada linha. Manteiga eleva linha em +1 quando defesa adversária é fraquíssima
-      if (fav.chFavGol >= 7) return { label: `${fav.lado} ${fav.nome} — Finalizações HT Over ${manteiga ? '6.5' : '5.5'}`, axis: "chutes_ht", icon: manteiga ? "🚀" : "🎯", color: "#ffd600" };
-      if (fav.chFavGol >= 6) return { label: `${fav.lado} ${fav.nome} — Finalizações HT Over ${manteiga ? '5.5' : '4.5'}`, axis: "chutes_ht", icon: manteiga ? "🚀" : "🎯", color: "#ffd600" };
-      if (fav.chFavGol >= 5) return { label: `${fav.lado} ${fav.nome} — Finalizações HT Over ${manteiga ? '4.5' : '3.5'}`, axis: "chutes_ht", icon: manteiga ? "🚀" : "🎯", color: "#ffd600" };
-      return null; // buffer insuficiente
     }
-
-    case "high_offense_balanced":
-      return { label: "Over 2.5 FT + Ambas Marcam", axis: "gols_btts", icon: "⚽", color: "#00e676" };
-
-    case "clear_favorite":
-      return fav.afDiff >= 35
-        ? { label: `${fav.lado} ${fav.nome} Vence + Over 0.5 HT`, axis: "golsHT_fav", icon: "⭐", color: "#ffd600" }
-        : { label: `Over 1.5 FT + Over 0.5 HT`,                   axis: "gols",       icon: "⚽", color: "#00e676"  };
-
-    case "slight_fav_offensive":
-      return { label: "Over 1.5 FT", axis: "gols", icon: "⚽", color: "#00e676" };
-
-    case "corner_dominant": {
-      // Buffer extremo v1.2: exC >= 10.0 + cvCantos <= 40 (consistência de elite)
-      if (g.exC >= 10.0 && (g.cvCantos || 0) <= 40) return { label: "Over 8.5 Cantos FT", axis: "cantos", icon: "🚩", color: "#00c2ff" };
-      return null;
-    }
-    
-    case "corner_heavy": {
-      const cantHFav = fav.cantFavHT;
-      // Condição especial: afFav > 80 permite cantFavHT >= 3.8 [EMENDA v1.3]
-      const thresholdCantos = (fav.afFav > 80) ? 4.2 : 3.9;
-      const cvCantosLimit = 65; // Flexibilização para perfis de cantos
-      
-      if (cantHFav >= thresholdCantos && (g.cvCantosHT || 0) <= cvCantosLimit)
-        return { label: `${fav.lado} ${fav.nome} — Over 3.5 Cantos HT`, axis: "cantos_ht", icon: "🚩", color: "#00c2ff" };
-      if (g.exC >= 10.0 && (g.cvCantos || 0) <= 40)
-        return { label: "Over 8.5 Cantos FT", axis: "cantos", icon: "🚩", color: "#00c2ff" };
-      return null;
-    }
-    case "balanced_btts":
-      return { label: "Ambas Marcam — Sim", axis: "btts", icon: "💜", color: "#d500f9" };
-
-    case "balanced_moderate":
-      return { label: "Over 1.5 FT", axis: "gols", icon: "⚽", color: "#00e676" };
-    
-    case "low_goals":
-      return { label: "Under 2.5 FT", axis: "under", icon: "🔒", color: "#ff9100" };
-
-    default:
-      if (g.exG >= 3.5)                              return { label: "Over 2.5 FT",       axis: "gols",   icon: "⚽", color: "#00e676"  };
-      if (g.exC >= 10.0 && g.cvCantos <= 40)        return { label: "Over 8.5 Cantos FT", axis: "cantos", icon: "🚩", color: "#00c2ff" };
-      return null;
   }
+  
+  return bestMarket;
 }
 
 /* ─────────────────────────────────────────
@@ -1049,6 +1427,16 @@ export function suggestCombo(g) {
   }
   const cands = [];
   
+  // 🎯 Adicionar sugestões especializadas para Pressão HT
+  if (profile === "chutes_ht_fav") {
+    const pressaoLines = suggestPressaoHTLines(g);
+    // Adicionar até 2 melhores sugestões Pressão HT (excluindo a principal se já for main)
+    const additionalLines = pressaoLines.slice(0, 2).filter(line => 
+      !main || line.label !== main.label
+    );
+    cands.push(...additionalLines);
+  }
+  
   // 🔥 GARANTIA DE EXIBIÇÃO POR PERFIL - Cantos primeiro no combo [AJUSTE DE CAPTAÇÃO]
   if (profile === "corner_dominant" || profile === "corner_heavy") {
     // Cantos como primeira sugestão para perfis de cantos
@@ -1090,7 +1478,10 @@ export function suggestCombo(g) {
   // 🔥 BYPASS DE DOMINÂNCIA ABSOLUTA — chFavGol >= 8 libera Over 6.5 sem exigir APPG/AS
   // Justificativa: volume de 8+ chutes ao gol no HT é evidência estatística suficiente por si só
   if (allowsHTFinalizations && fav.chFavGol >= 8 && main.axis === 'fav_gols') {
-    cands.push({ label: `${fav.lado} ${fav.nome} — Finalizações HT Over 6.5`, axis: "chutes_ht", icon: "🔥" });
+    const htLine = createHTShotsLine(fav, 'Over 6.5', 10.5);
+    if (htLine) {
+      cands.push({ label: htLine, axis: "chutes_ht", icon: "🔥" });
+    }
   }
 
   // ⚡ BYPASS BLITZ — gap ofensivo/defensivo >= 45 + chFavGol >= 6.5 + dfZebra < 30 [CALIBRAGEM v1.2]
@@ -1099,7 +1490,10 @@ export function suggestCombo(g) {
   const blitzGap = dfZebra > 0 ? (fav.afFav - dfZebra) : 0;
   if (allowsHTFinalizations && blitzGap >= 45 && fav.chFavGol >= 6.5 && dfZebra < 30) {
     const blitzLine = fav.chFavGol >= 7 ? '5.5' : '4.5';
-    cands.push({ label: `⚡ Blitz HT — ${fav.lado} ${fav.nome} Finalizações HT Over ${blitzLine}`, axis: "chutes_ht", icon: "⚡" });
+    const htLine = createHTShotsLine(fav, `Over ${blitzLine}`, 10.5);
+    if (htLine) {
+      cands.push({ label: `⚡ Blitz HT — ${htLine}`, axis: "chutes_ht", icon: "⚡" });
+    }
   }
 
   // Chutes HT (apenas se permitido) — requer AS >= 35% E APPG >= 0.80 (Elite v1.1) + Buffer +1 + cvCantosHT <= 55
@@ -1108,12 +1502,25 @@ export function suggestCombo(g) {
   const dadoExportado = (favAsPrec > 0 && favAppg > 0);
   const allowsHTByElite = favAsPrec >= 35 && favAppg >= 0.80 && dadoExportado;
   if (allowsHTFinalizations && allowsHTByElite && main.axis !== "chutes_ht") {
-    if      (fav.chFavGol >= 7)                      cands.push({ label: `${fav.lado} ${fav.nome} — Finalizações HT Over 5.5`, axis: "chutes_ht", icon: "🎯" });
-    else if (fav.chFavGol >= 6)                       cands.push({ label: `${fav.lado} ${fav.nome} — Finalizações HT Over 4.5`, axis: "chutes_ht", icon: "🎯" });
-    else if (fav.chFavGol >= 5)                       cands.push({ label: `${fav.lado} ${fav.nome} — Finalizações HT Over 3.5`, axis: "chutes_ht", icon: "🎯" });
+    if      (fav.chFavGol >= 7) {
+      const htLine = createHTShotsLine(fav, 'Over 5.5', 10.5);
+      if (htLine) cands.push({ label: htLine, axis: "chutes_ht", icon: "🎯" });
+    }
+    else if (fav.chFavGol >= 6) {
+      const htLine = createHTShotsLine(fav, 'Over 4.5', 10.5);
+      if (htLine) cands.push({ label: htLine, axis: "chutes_ht", icon: "🎯" });
+    }
+    else if (fav.chFavGol >= 5) {
+      const htLine = createHTShotsLine(fav, 'Over 3.5', 10.5);
+      if (htLine) cands.push({ label: htLine, axis: "chutes_ht", icon: "🎯" });
+    }
   }
-  if (allowsHTFinalizations && allowsHTByElite && main.axis !== "chutes_ht" && fav.chFavTot >= 9)
-    cands.push({ label: `${fav.lado} ${fav.nome} — Finalizações HT Over 6.5`, axis: "chutes_ht", icon: "🎯" });
+  if (allowsHTFinalizations && allowsHTByElite && main.axis !== "chutes_ht" && fav.chFavTot >= 9) {
+    const htLine = createHTShotsLine(fav, 'Over 6.5', 10.5);
+    if (htLine) {
+      cands.push({ label: htLine, axis: "chutes_ht", icon: "🎯" });
+    }
+  }
 
   // 🔁 DIVERSIFICAÇÃO CROSS-AXIS — Cantos HT para perfis com pressão ofensiva
   // Não exige APPG (§4 é para finalizações, não cantos). Exige: cantFavHT com buffer, exC decente, CV controlado
@@ -1273,9 +1680,15 @@ export function suggestBetBuilder(g) {
 
     // 1. Chutes HT (Fav) - Micro-linha
     if (allowsHTFinalizations && fav.chFavGol >= 5.0) {
-      cands.push({ label: `${fav.lado} ${fav.nome} — Finalizações HT Over 4.5`, axis: "chutes_ht", icon: "🎯", isMicro: true });
+      const htLine = createHTShotsLine(fav, 'Over 4.5', 10.5);
+      if (htLine) {
+        cands.push({ label: htLine, axis: "chutes_ht", icon: "🎯", isMicro: true });
+      }
     } else if (allowsHTFinalizations && fav.chFavGol >= 3.5) {
-      cands.push({ label: `${fav.lado} ${fav.nome} — Finalizações HT Over 3.5`, axis: "chutes_ht", icon: "🎯", isMicro: true });
+      const htLine = createHTShotsLine(fav, 'Over 3.5', 10.5);
+      if (htLine) {
+        cands.push({ label: htLine, axis: "chutes_ht", icon: "🎯", isMicro: true });
+      }
     }
 
     // 2. Cantos HT (Fav) - Micro-linha

@@ -3,6 +3,9 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
 
+// 🆕 Cliente para servidor (usa SERVICE_ROLE_KEY para operações de escrita)
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? supabaseAnonKey;
+
 // Log para diagnóstico — aparece no console do browser
 if (typeof window !== 'undefined') {
   console.log('[SUPABASE] URL presente:', !!supabaseUrl);
@@ -16,9 +19,20 @@ if (!supabaseConfigured) {
   console.warn('[Supabase] Variáveis NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY ausentes — modo offline');
 }
 
+// ✅ Cliente público (leitura) - usa ANON_KEY
 export const supabase: SupabaseClient = supabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey)
   : createClient('https://placeholder.supabase.co', 'placeholder');
+
+// 🆕 Cliente de servidor (escrita) - usa SERVICE_ROLE_KEY
+export const supabaseServer: SupabaseClient = supabaseConfigured
+  ? createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    })
+  : supabase; // Fallback para cliente público
 
 // 🆕 Wrapper para evitar chamadas de rede em modo offline
 export const safeSupabaseCall = async <T>(
